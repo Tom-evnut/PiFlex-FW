@@ -1,0 +1,38 @@
+; PiFlex-FW - FlexRay RX bit sampler (SKELETON)
+; SPDX-License-Identifier: GPL-3.0-or-later
+;
+; Clean-room starting point, written from the FlexRay line coding and the
+; NCV7383 datasheet - not derived from any third-party firmware.
+;
+; The FlexRay line idles high. A frame opens with the Transmit Start Sequence
+; (TSS: 3-15 low bits - the F11 car uses 9), then the Frame Start Sequence,
+; then byte-start sequences around each 8-bit byte. This program oversamples
+; RXD and ships raw samples to the C side, which recovers byte framing. Once
+; the timing is proven, the TSS/BSS framing can move in here to cut USB load.
+
+.program flexray_rx
+.wrap_target
+    in pins, 1          ; sample one RXD bit into the ISR (autopush at 8 bits)
+.wrap
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+// Initialise one state machine to oversample `pin` at bitrate * oversample.
+static inline void flexray_rx_program_init(PIO pio, uint sm, uint offset,
+                                           uint pin, uint bitrate_hz, uint oversample) {
+    pio_sm_config c = flexray_rx_program_get_default_config(offset);
+    sm_config_set_in_pins(&c, pin);
+    sm_config_set_in_shift(&c, false /* shift left / MSB first */, true /* autopush */, 8);
+
+    pio_gpio_init(pio, pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, false /* input */);
+
+    // One PIO clock per sample; find bit centres on the C side for now.
+    float div = (float)clock_get_hz(clk_sys) / (float)(bitrate_hz * oversample);
+    sm_config_set_clkdiv(&c, div);
+
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}
