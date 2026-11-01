@@ -32,19 +32,25 @@ lives in [`src/protocol.h`](src/protocol.h).
 
 ## Build
 
+Needs the Pico SDK, an `arm-none-eabi-gcc` toolchain, CMake >= 3.13, Ninja, and a
+host C/C++ compiler (the SDK builds `pioasm`/`picotool` natively). The
+arduino-pico core bundles a usable `arm-none-eabi-gcc` if you already have it.
+
 ```sh
-export PICO_SDK_PATH=/path/to/pico-sdk   # SDK 2.x (RP2350 support)
-cmake -B build -S .
-cmake --build build
+export PICO_SDK_PATH=/path/to/pico-sdk       # RP2350-capable SDK
+./build.sh                                   # also honours PICO_TOOLCHAIN_PATH
 ```
 
 Flash `build/piflex_fw.uf2` via BOOTSEL.
+
+Known-good on Windows: Pico SDK (RP2350), `arm-none-eabi-gcc` 10.3 (arduino-pico
+`pqt-gcc`), CMake 3.30 + Ninja, MinGW g++ for the host tools.
 
 ## Status (phase 1)
 
 | Phase | What | State |
 |-------|------|-------|
-| 1 | FlexRay sniffer → format-1 stream over USB | **decoder drafted** — PIO BSS-sync deserializer + C framing + header/frame CRC written; frame CRC validated against standard vectors, **PIO timing untuned on hardware** (`<<TUNE>>` marks in `src/flexray_rx.pio`) |
+| 1 | FlexRay sniffer → format-1 stream over USB | **builds for pico2** — PIO deserializer + C framing + CRCs compile and link (elf + uf2); frame CRC validated against standard vectors; **PIO sample timing untuned on hardware** (`<<TUNE>>` marks in `src/flexray_rx.pio`) |
 | 2 | Device timestamps (format 2) + fine clock / sequence (format 3) | planned |
 | 3 | MITM pass-through (both transceivers, per-frame TXEN, 9-bit TSS) | planned |
 | 4 | Injector (`0x90`/`0x91`, E2E CRC-8) | planned |

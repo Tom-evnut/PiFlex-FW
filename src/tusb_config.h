@@ -13,6 +13,11 @@
 #endif
 
 #define CFG_TUD_ENABLED       1
+
+// This TinyUSB version requires an explicit root-hub-port mode; the device runs
+// at full speed on root-hub port 0.
+#define CFG_TUSB_RHPORT0_MODE (OPT_MODE_DEVICE | OPT_MODE_FULL_SPEED)
+
 #define CFG_TUD_ENDPOINT0_SIZE 64
 
 #define CFG_TUD_CDC           0

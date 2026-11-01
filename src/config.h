@@ -28,7 +28,6 @@
 #define FR_BITRATE_HZ   10000000u  // 10 Mbit/s
 #define FR_OVERSAMPLE   8u         // PIO samples per bit (see flexray_rx.pio)
 
-// Longest FlexRay payload: 127 two-byte words.
-#define FR_MAX_PAYLOAD  254
+// FR_MAX_PAYLOAD lives in flexray_decode.h (shared with the host-testable core).
 
 #endif // PIFLEX_CONFIG_H
