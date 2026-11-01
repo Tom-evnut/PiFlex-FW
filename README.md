@@ -19,9 +19,9 @@ host code — no third-party firmware source is copied.
   will use software CAN (`can2040`) on a spare PIO block — no CAN controller IC.
 - Board design: <https://github.com/damienmaguire/BMW-F11-EV-Conversion/tree/main/Design/FlexRay>
 
-> ⚠️ **Pin map is provisional.** The GPIO numbers in [`src/config.h`](src/config.h)
-> are placeholders tagged `TODO confirm`. Verify them against
-> `Pi_Flex_V1.kicad_sch` and the physical board before the first flash.
+> ✅ **Confirmed on the bench.** The GPIO map in [`src/config.h`](src/config.h)
+> (FR1 RXD/TXD/TXEN = 26/28/27, FR2 = 6/4/5, STBN=3, BGE=2) is verified on a
+> physical Pi_Flex V1 board — FlexRay decodes end-to-end on both channels.
 
 ## Host side
 
@@ -60,7 +60,7 @@ gcc -I ../src decode_test.c ../src/flexray_decode.c -o decode_test && ./decode_t
 
 | Phase | What | State |
 |-------|------|-------|
-| 1 | FlexRay sniffer → format-1 stream over USB | **builds for pico2** — PIO deserializer + C framing + CRCs compile and link (elf + uf2); frame CRC validated against standard vectors; **PIO sample timing untuned on hardware** (`<<TUNE>>` marks in `src/flexray_rx.pio`) |
+| 1 | FlexRay sniffer → format-1 stream over USB | **working on hardware** — captures FlexRay end-to-end on a Pi_Flex V1 bench board: 3 slots decode byte-exact, cycles 0–63, ~540 fps, 0 resync skips; enumerates as panda; PIO sample timing tuned against a logic capture; frame CRC validated against standard vectors |
 | 2 | Device timestamps (format 2) + fine clock / sequence (format 3) | planned |
 | 3 | MITM pass-through (both transceivers, per-frame TXEN, 9-bit TSS) | planned |
 | 4 | Injector (`0x90`/`0x91`, E2E CRC-8) | planned |
@@ -69,11 +69,17 @@ gcc -I ../src decode_test.c ../src/flexray_decode.c -o decode_test && ./decode_t
 
 The core clean-room decode — TSS/FSS/BSS line recovery in
 [`src/flexray_rx.pio`](src/flexray_rx.pio), and byte framing + 11-bit header CRC
-and 24-bit frame CRC in [`src/flexray_rx.c`](src/flexray_rx.c) — is written. The
-frame CRC is verified against the standard CRC-24/FlexRay check vectors. What
-remains is **tuning the PIO sample timing and idle threshold on the bench** with
-a logic analyser (the `<<TUNE>>` markers), and confirming the header-CRC init
-(0x1A) and the GPIO pin map against the hardware.
+and 24-bit frame CRC in [`src/flexray_rx.c`](src/flexray_rx.c) — is written and
+**proven on hardware**: the PIO sample timing was trimmed against a raw-word
+capture, the GPIO pin map is confirmed, and frames decode byte-exact on a bench
+board. The frame CRC is also verified against the standard CRC-24/FlexRay check
+vectors.
+
+> **Bench note (single-source capture):** the frame CRC is validated per channel
+> (init `0xFEDCBA` for channel A / FR1, `0xABCDEF` for channel B / FR2, per the
+> FlexRay spec). A signal generator that emits a channel-A CRC on a frame fed to
+> FR2 will show `frame_crc_ok = false` even though the payload is intact; this is
+> correct spec behaviour, not a decode fault.
 
 ## License
 
