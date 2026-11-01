@@ -2,52 +2,47 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Brings up USB (Panda-compatible) and the FlexRay RX samplers, then streams
-// captured frames to SavvyCAN as format-1 records. Device timestamps (format
-// 2) and the fine clock + sequence number (format 3) come in later phases.
+// captured frames to SavvyCAN. The host selects the record format: 1 (stock),
+// 2 (device microsecond timestamp + CRC flags), or 3 (format 2 + a per-frame
+// sequence number that exposes USB FIFO loss). See protocol.h / flexray_record.c.
 #include "pico/stdlib.h"
 #include "pico/bootrom.h"
 #include "tusb.h"
 #include "config.h"
 #include "protocol.h"
 #include "flexray_rx.h"
-#include <string.h>
+#include "flexray_record.h"
 
 static uint8_t s_record_format = PIFLEX_FMT_STOCK;
+
+// Counts frames the capture core produces; sent as the format-3 sequence number
+// so the host can detect frames lost to a full USB FIFO (a gap in the sequence).
+static uint32_t s_frame_seq = 0;
 
 // Set by the ENTER_BOOTLOADER control request; the main loop does the reset once
 // the control-status ACK has been sent, so the host sees the request succeed.
 static volatile bool s_enter_bootloader = false;
 
-// Pack a decoded frame into a format-1 record and queue it on the bulk IN pipe.
-// Layout must match SavvyCAN's PicoFlexRayParser (see protocol.h).
-static void send_frame_fmt1(const fr_frame_t *f) {
-    uint8_t rec[2 + 1 + 5 + FR_MAX_PAYLOAD + 3];
-    const uint16_t body_len = (uint16_t)(1 + 5 + f->payload_len + 3);
+// Pack a decoded frame in the selected record format and queue it on the bulk
+// IN pipe. Layout lives in flexray_record.c, matched to SavvyCAN's parser.
+static void send_frame(const fr_frame_t *f) {
+    // Format 1 carries no CRC flags, and the host treats every format-1 frame as
+    // having passed both CRCs, so only forward good frames in that mode. Formats
+    // 2/3 carry the CRC status in their flags byte, so forward every frame — a
+    // CRC error is information the host wants to see.
+    if (s_record_format == PIFLEX_FMT_STOCK && !(f->header_crc_ok && f->frame_crc_ok))
+        return;
 
-    rec[0] = (uint8_t)(body_len & 0xFF);
-    rec[1] = (uint8_t)((body_len >> 8) & 0xFF);
-    rec[2] = f->channel;                                   // source: 1=FR1, 2=FR2
+    uint8_t rec[PIFLEX_RECORD_MAX];
+    const uint32_t dev_us = time_us_32();   // device microsecond clock; wraps ~71.6 min, the host unwraps it
+    const uint32_t seq    = s_frame_seq++;  // advances per captured frame, even when a record is dropped
+    const int total = flexray_record_build(rec, f, s_record_format, dev_us, seq);
 
-    // 5-byte FlexRay header, bit-packed exactly as the host un-packs it.
-    rec[3] = (uint8_t)((f->indicators << 3) | ((f->slot_id >> 8) & 0x07));
-    rec[4] = (uint8_t)(f->slot_id & 0xFF);
-    rec[5] = (uint8_t)(((f->payload_len / 2) << 1) | ((f->header_crc >> 10) & 0x01));
-    rec[6] = (uint8_t)((f->header_crc >> 2) & 0xFF);
-    rec[7] = (uint8_t)(((f->header_crc & 0x03) << 6) | (f->cycle & 0x3F));
-
-    memcpy(&rec[8], f->payload, f->payload_len);
-
-    uint8_t *crc = &rec[8 + f->payload_len];               // 24-bit frame CRC, big-endian
-    crc[0] = (uint8_t)((f->frame_crc >> 16) & 0xFF);
-    crc[1] = (uint8_t)((f->frame_crc >> 8) & 0xFF);
-    crc[2] = (uint8_t)(f->frame_crc & 0xFF);
-
-    const uint32_t total = (uint32_t)(2 + body_len);
-    if (tud_vendor_write_available() >= total) {
-        tud_vendor_write(rec, total);
+    if (tud_vendor_write_available() >= (uint32_t)total) {
+        tud_vendor_write(rec, (uint32_t)total);
         tud_vendor_write_flush();
     }
-    // else: drop; a later phase tracks this as a USB-FIFO loss (format 3 seq).
+    // else: drop. In format 3 the resulting gap in the sequence number tells the host.
 }
 
 // Host control requests on the vendor interface.
@@ -56,13 +51,18 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage,
     if (stage != CONTROL_STAGE_SETUP) return true;
 
     switch (req->bRequest) {
-        case PIFLEX_SET_RECORD_FORMAT:
-            s_record_format = (uint8_t)req->wValue;        // TODO honour 2/3 once implemented
+        case PIFLEX_SET_RECORD_FORMAT: {
+            const uint8_t fmt = (uint8_t)req->wValue;
+            if (fmt == PIFLEX_FMT_STOCK || fmt == PIFLEX_FMT_DEVTIME || fmt == PIFLEX_FMT_TSSEQ)
+                s_record_format = fmt;                     // ignore an unknown value, keep the current format
             return tud_control_status(rhport, req);
+        }
 
         case PIFLEX_GET_TS_INFO: {
-            // TODO: reply with the timestamped-capture identity when format 3 lands.
-            static const uint8_t info[4] = {0, 0, 0, 0};
+            // A non-empty reply tells the host we do timestamped capture, so it
+            // selects format 3 (device us + per-frame sequence). The host only
+            // checks that the reply is non-empty; its contents are unused.
+            static const uint8_t info[4] = {'P', 'F', PIFLEX_FMT_TSSEQ, 0};
             return tud_control_xfer(rhport, req, (void *)info, sizeof(info));
         }
 
@@ -114,8 +114,7 @@ int main(void) {
             reset_usb_boot(0, 0);  // reboot into the RP2 USB mass-storage bootloader
         }
         if (tud_vendor_mounted() && flexray_rx_poll(&frame)) {
-            (void)s_record_format;   // phase 1 always emits format 1
-            send_frame_fmt1(&frame);
+            send_frame(&frame);
         }
     }
 }

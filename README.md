@@ -50,12 +50,14 @@ Known-good on Windows: Pico SDK (RP2350), `arm-none-eabi-gcc` 10.3 (arduino-pico
 
 ## Tests
 
-The SDK-free decode core (`src/flexray_decode.c`) has a host round-trip test that
-needs only a host compiler (no Pico SDK):
+The SDK-free cores have host round-trip tests that need only a host compiler (no
+Pico SDK): `decode_test` exercises framing + CRCs, and `record_test` checks the
+USB record layout against SavvyCAN's parser offsets for every format.
 
 ```sh
 cd test
 gcc -I ../src decode_test.c ../src/flexray_decode.c -o decode_test && ./decode_test
+gcc -I ../src record_test.c ../src/flexray_record.c ../src/flexray_decode.c -o record_test && ./record_test
 ```
 
 ## Status (phase 1)
@@ -63,7 +65,7 @@ gcc -I ../src decode_test.c ../src/flexray_decode.c -o decode_test && ./decode_t
 | Phase | What | State |
 |-------|------|-------|
 | 1 | FlexRay sniffer → format-1 stream over USB | **working on hardware** — captures FlexRay end-to-end on a Pi_Flex V1 bench board: 3 slots decode byte-exact, cycles 0–63, ~540 fps, 0 resync skips; enumerates as panda; PIO sample timing tuned against a logic capture; frame CRC validated against standard vectors |
-| 2 | Device timestamps (format 2) + fine clock / sequence (format 3) | planned |
+| 2 | Device timestamps (format 2) + per-frame sequence (format 3) | **implemented** — emits format 2 (device µs + CRC flags) and format 3 (+ a sequence number that exposes USB-FIFO loss) on the host's `SET_RECORD_FORMAT` request; byte layout verified by a host round-trip test. Bench verification pending. The fine clock is sent as zero (the timestamp is read in software at dequeue, not latched in hardware), so the hardware-timestamp flag stays clear |
 | 3 | MITM pass-through (both transceivers, per-frame TXEN, 9-bit TSS) | planned |
 | 4 | Injector (`0x90`/`0x91`, E2E CRC-8) | planned |
 | 5 | Source / generator mode | planned |
