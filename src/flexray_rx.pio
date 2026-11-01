@@ -1,34 +1,82 @@
-; PiFlex-FW - FlexRay RX bit sampler (SKELETON)
+; PiFlex-FW - FlexRay RX bit decoder.
 ; SPDX-License-Identifier: GPL-3.0-or-later
 ;
-; Clean-room starting point, written from the FlexRay line coding and the
-; NCV7383 datasheet - not derived from any third-party firmware.
+; Clean-room decoder written from the FlexRay line coding (TSS / FSS / BSS / FES)
+; and the NCV7383 datasheet - not derived from any third-party firmware.
 ;
-; The FlexRay line idles high. A frame opens with the Transmit Start Sequence
-; (TSS: 3-15 low bits - the F11 car uses 9), then the Frame Start Sequence,
-; then byte-start sequences around each 8-bit byte. This program oversamples
-; RXD and ships raw samples to the C side, which recovers byte framing. Once
-; the timing is proven, the TSS/BSS framing can move in here to cut USB load.
+; Runs at FR_OVERSAMPLE (8) samples per FlexRay bit. `pin` is the channel's RXD
+; line and is also the jmp pin. The SM emits one 32-bit word per received byte:
+;     bit 8      = frame-start flag (set on the first byte after a channel idle)
+;     bits 7..0  = the data byte, MSB first
+; The C side (flexray_rx.c) does the framing, length and CRC checks.
+;
+; Line coding recovered here:
+;   idle  = sustained high
+;   TSS   = run of low bits (>= 3; the F11 car uses 9) - start of transmission
+;   FSS   = one high bit after the TSS
+;   byte  = BSS ("10": one high then one low bit) + 8 data bits, MSB first
+;   FES   = "01" after the last byte, then idle
+; The receiver resynchronises on every BSS high->low (falling) edge.
+;
+; TIMING / THRESHOLDS marked <<TUNE>> were worked out on paper at 8x oversample
+; and MUST be trimmed against a logic-analyser capture on the bench (bit-centre
+; sample points and the idle/EOF high threshold). Note PIO `set` immediates cap
+; at 31, so a longer idle threshold needs a register-loaded count.
 
 .program flexray_rx
+
 .wrap_target
-    in pins, 1          ; sample one RXD bit into the ISR (autopush at 8 bits)
+start:
+    set y, 1                 ; y = frame-start flag for the next byte emitted
+idle_hi:
+    ; Require a sustained high (channel idle) before accepting a TSS, so we only
+    ; (re)synchronise at a real frame boundary, never mid-frame.  <<TUNE count>>
+    set x, 20
+idle_lp:
+    jmp pin idle_cont        ; pin still high -> keep counting
+    jmp idle_hi              ; went low too soon -> not idle yet, restart
+idle_cont:
+    jmp x-- idle_lp          ; enough consecutive highs -> idle confirmed
+    wait 0 pin 0             ; TSS: falling edge = start of transmission
+    wait 1 pin 0             ; FSS: rising edge = end of the TSS
+byte:
+    ; Wait for the next BSS falling edge (BSS0 high -> BSS1 low). If the line
+    ; stays high past the timeout, the frame has ended (FES + idle) -> resync.
+    set x, 20                ; high timeout, a few bit-times > inter-byte high  <<TUNE>>
+bss_hi:
+    jmp pin bss_cont         ; still high
+    jmp bss_edge             ; dropped low -> BSS falling edge seen
+bss_cont:
+    jmp x-- bss_hi
+    jmp start                ; stayed high -> end of frame / idle, go resync
+bss_edge:
+    ; We are in BSS1 (low). Skip the rest of it and land on data bit 0's centre.
+    nop [10]                 ; ~ BSS1 remainder (8) + half a bit (4)  <<TUNE>>
+    in y, 1                  ; shift the frame-start flag in first -> ends at bit 8
+    set y, 0                 ; only the first byte of a frame is flagged
+    set x, 7                 ; 8 data bits
+data_lp:
+    in pins, 1 [6]           ; sample one data bit (MSB first), ~8-cycle spacing  <<TUNE>>
+    jmp x-- data_lp
+    push noblock             ; emit [bit8 = start][bits 7..0 = byte]
+    jmp byte
 .wrap
 
 % c-sdk {
 #include "hardware/clocks.h"
 
-// Initialise one state machine to oversample `pin` at bitrate * oversample.
+// Initialise one state machine to decode FlexRay on `pin` at bitrate*oversample.
 static inline void flexray_rx_program_init(PIO pio, uint sm, uint offset,
                                            uint pin, uint bitrate_hz, uint oversample) {
     pio_sm_config c = flexray_rx_program_get_default_config(offset);
     sm_config_set_in_pins(&c, pin);
-    sm_config_set_in_shift(&c, false /* shift left / MSB first */, true /* autopush */, 8);
+    sm_config_set_jmp_pin(&c, pin);
+    // Shift left so the first sampled bit is the MSB; manual push of 32-bit words.
+    sm_config_set_in_shift(&c, false /* shift left */, false /* no autopush */, 32);
 
     pio_gpio_init(pio, pin);
     pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, false /* input */);
 
-    // One PIO clock per sample; find bit centres on the C side for now.
     float div = (float)clock_get_hz(clk_sys) / (float)(bitrate_hz * oversample);
     sm_config_set_clkdiv(&c, div);
 

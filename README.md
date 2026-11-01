@@ -44,16 +44,20 @@ Flash `build/piflex_fw.uf2` via BOOTSEL.
 
 | Phase | What | State |
 |-------|------|-------|
-| 1 | FlexRay sniffer → format-1 stream over USB | **scaffolded** — USB + record encoder wired; PIO decoder is a stub (`src/flexray_rx.c`) |
+| 1 | FlexRay sniffer → format-1 stream over USB | **decoder drafted** — PIO BSS-sync deserializer + C framing + header/frame CRC written; frame CRC validated against standard vectors, **PIO timing untuned on hardware** (`<<TUNE>>` marks in `src/flexray_rx.pio`) |
 | 2 | Device timestamps (format 2) + fine clock / sequence (format 3) | planned |
 | 3 | MITM pass-through (both transceivers, per-frame TXEN, 9-bit TSS) | planned |
 | 4 | Injector (`0x90`/`0x91`, E2E CRC-8) | planned |
 | 5 | Source / generator mode | planned |
 | 6 | CAN + the 2× CAN / 2× FlexRay board (`can2040`) | planned |
 
-The core clean-room work — recovering FlexRay byte framing from the oversampled
-line and checking the header/frame CRCs — is the `TODO` block in
-[`src/flexray_rx.c`](src/flexray_rx.c).
+The core clean-room decode — TSS/FSS/BSS line recovery in
+[`src/flexray_rx.pio`](src/flexray_rx.pio), and byte framing + 11-bit header CRC
+and 24-bit frame CRC in [`src/flexray_rx.c`](src/flexray_rx.c) — is written. The
+frame CRC is verified against the standard CRC-24/FlexRay check vectors. What
+remains is **tuning the PIO sample timing and idle threshold on the bench** with
+a logic analyser (the `<<TUNE>>` markers), and confirming the header-CRC init
+(0x1A) and the GPIO pin map against the hardware.
 
 ## License
 
