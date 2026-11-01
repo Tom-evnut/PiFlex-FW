@@ -46,6 +46,16 @@ Flash `build/piflex_fw.uf2` via BOOTSEL.
 Known-good on Windows: Pico SDK (RP2350), `arm-none-eabi-gcc` 10.3 (arduino-pico
 `pqt-gcc`), CMake 3.30 + Ninja, MinGW g++ for the host tools.
 
+## Tests
+
+The SDK-free decode core (`src/flexray_decode.c`) has a host round-trip test that
+needs only a host compiler (no Pico SDK):
+
+```sh
+cd test
+gcc -I ../src decode_test.c ../src/flexray_decode.c -o decode_test && ./decode_test
+```
+
 ## Status (phase 1)
 
 | Phase | What | State |
