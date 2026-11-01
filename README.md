@@ -65,7 +65,7 @@ gcc -I ../src record_test.c ../src/flexray_record.c ../src/flexray_decode.c -o r
 | Phase | What | State |
 |-------|------|-------|
 | 1 | FlexRay sniffer → format-1 stream over USB | **working on hardware** — captures FlexRay end-to-end on a Pi_Flex V1 bench board: 3 slots decode byte-exact, cycles 0–63, ~540 fps, 0 resync skips; enumerates as panda; PIO sample timing tuned against a logic capture; frame CRC validated against standard vectors |
-| 2 | Device timestamps (format 2) + per-frame sequence (format 3) | **implemented** — emits format 2 (device µs + CRC flags) and format 3 (+ a sequence number that exposes USB-FIFO loss) on the host's `SET_RECORD_FORMAT` request; byte layout verified by a host round-trip test. Bench verification pending. The fine clock is sent as zero (the timestamp is read in software at dequeue, not latched in hardware), so the hardware-timestamp flag stays clear |
+| 2 | Device timestamps (format 2) + per-frame sequence (format 3) | **working on hardware** — emits format 2 (device µs + CRC flags) and format 3 (+ a sequence number that exposes USB-FIFO loss) on the host's `SET_RECORD_FORMAT` request. Bench-verified on a Pi_Flex V1 board: format-3 records decode byte-exact, the device clock and sequence number advance per frame, and `frame_crc_ok`/`header_crc_ok` now reach the host both set and clear. The fine clock is sent as zero (the timestamp is read in software at dequeue, not latched in hardware), so the hardware-timestamp flag stays clear |
 | 3 | MITM pass-through (both transceivers, per-frame TXEN, 9-bit TSS) | planned |
 | 4 | Injector (`0x90`/`0x91`, E2E CRC-8) | planned |
 | 5 | Source / generator mode | planned |
