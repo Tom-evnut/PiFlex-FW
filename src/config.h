@@ -10,17 +10,18 @@
 // side (RXD/TXD/TXEN) wired to the Pico and a bus side (BP/BM). Channel 1 is
 // bus side A, channel 2 is bus side B - together they form the MITM bridge.
 //
-// TODO: confirm these GPIO numbers against Pi_Flex_V1.kicad_sch and the bench
-// board before first flash. The schematic net names are RXD1/TXD1/TXEN1,
-// RXD2/TXD2/TXEN2, STBN and BGE; the numbers below are placeholders.
-#define FR1_RXD_PIN     2    // NCV7383 #1 RXD  -> Pico  (input)   [net RXD1]   TODO confirm
-#define FR1_TXD_PIN     3    // NCV7383 #1 TXD  <- Pico  (output)  [net TXD1]   TODO confirm
-#define FR1_TXEN_PIN    4    // NCV7383 #1 TXEN <- Pico  (output)  [net TXEN1]  TODO confirm
-#define FR2_RXD_PIN     6    // NCV7383 #2 RXD  -> Pico  (input)   [net RXD2]   TODO confirm
-#define FR2_TXD_PIN     7    // NCV7383 #2 TXD  <- Pico  (output)  [net TXD2]   TODO confirm
-#define FR2_TXEN_PIN    8    // NCV7383 #2 TXEN <- Pico  (output)  [net TXEN2]  TODO confirm
-#define FR_STBN_PIN     10   // /STB standby (active low, drive high to run)    [net STBN]  TODO confirm
-#define FR_BGE_PIN      11   // bus-guardian enable                            [net BGE]   TODO confirm
+// GPIO map for the Pi_Flex V1 board (Pico 2). Confirmed against the proven
+// dynm/Damien KNOWN_GOOD firmware's flexray_pins.h, which runs correctly on this
+// exact bench board (RX decodes on both channels, TX verified on FR1 GP28/GP27).
+// FR1 = "car side", FR2 = "DDE side".
+#define FR1_RXD_PIN     26   // NCV7383 #1 RXD  -> Pico  (input)   [net RXD1]
+#define FR1_TXD_PIN     28   // NCV7383 #1 TXD  <- Pico  (output)  [net TXD1]
+#define FR1_TXEN_PIN    27   // NCV7383 #1 TXEN <- Pico  (output)  [net TXEN1]
+#define FR2_RXD_PIN     6    // NCV7383 #2 RXD  -> Pico  (input)   [net RXD2]
+#define FR2_TXD_PIN     4    // NCV7383 #2 TXD  <- Pico  (output)  [net TXD2]
+#define FR2_TXEN_PIN    5    // NCV7383 #2 TXEN <- Pico  (output)  [net TXEN2]
+#define FR_STBN_PIN     3    // /STB standby (active low, drive high to run)    [net STBN]
+#define FR_BGE_PIN      2    // bus-guardian enable                            [net BGE]
 
 #define STATUS_LED_PIN  PICO_DEFAULT_LED_PIN  // direct GPIO on the non-W Pico 2
 

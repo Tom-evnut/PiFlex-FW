@@ -72,9 +72,25 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage,
 int main(void) {
     stdio_init_all();
 
-    // Take both NCV7383 transceivers out of standby, bus guardian off.
+    // Pi_Flex board bring-up (mirrors the proven dynm KNOWN_GOOD sequence).
+    //
+    // We are a pure sniffer and never transmit, so hold both TXEN lines INACTIVE.
+    // TXEN is active-low, so inactive = HIGH keeps each NCV7383 in receive mode and
+    // driving its RXD output; left floating the transceiver can sit in TX mode and
+    // RXD stays idle (captured nothing on the bench). KNOWN_GOOD pulls these up; we
+    // drive them high directly since we never need the PIO to assert them.
+    gpio_init(FR1_TXEN_PIN); gpio_set_dir(FR1_TXEN_PIN, GPIO_OUT); gpio_put(FR1_TXEN_PIN, 1);
+    gpio_init(FR2_TXEN_PIN); gpio_set_dir(FR2_TXEN_PIN, GPIO_OUT); gpio_put(FR2_TXEN_PIN, 1);
+
+    // Pull up the RXD inputs so the line is defined between frames (matches KNOWN_GOOD).
+    gpio_pull_up(FR1_RXD_PIN);
+    gpio_pull_up(FR2_RXD_PIN);
+
+    // Take both NCV7383 transceivers out of standby into normal mode. BGE must be
+    // HIGH for the transceiver to receive on this board (matches the proven KNOWN_GOOD
+    // setup: STBN=1, BGE=1); BGE low left RXD inactive and captured nothing on the bench.
     gpio_init(FR_STBN_PIN); gpio_set_dir(FR_STBN_PIN, GPIO_OUT); gpio_put(FR_STBN_PIN, 1);
-    gpio_init(FR_BGE_PIN);  gpio_set_dir(FR_BGE_PIN,  GPIO_OUT); gpio_put(FR_BGE_PIN,  0);
+    gpio_init(FR_BGE_PIN);  gpio_set_dir(FR_BGE_PIN,  GPIO_OUT); gpio_put(FR_BGE_PIN,  1);
 
     tusb_init();
     flexray_rx_init();

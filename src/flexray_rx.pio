@@ -50,13 +50,17 @@ bss_cont:
     jmp x-- bss_hi
     jmp start                ; stayed high -> end of frame / idle, go resync
 bss_edge:
-    ; We are in BSS1 (low). Skip the rest of it and land on data bit 0's centre.
-    nop [10]                 ; ~ BSS1 remainder (8) + half a bit (4)  <<TUNE>>
+    ; We are at the BSS1 falling edge (line low). Land the first sample on data
+    ; bit 0's centre. From here the first `in pins` fires after nop(1+7) + the
+    ; three single-cycle ops below + 1 = 12 sample-clocks, i.e. BSS1 (8) + half a
+    ; bit (4) past the edge = bit-0 centre. Bench-trimmed against a raw-word
+    ; capture (nop[10] sampled +3 late and flipped the trailing bits).
+    nop [7]                  ; BSS1 remainder (8) + half a bit (4) to bit-0 centre
     in y, 1                  ; shift the frame-start flag in first -> ends at bit 8
     set y, 0                 ; only the first byte of a frame is flagged
     set x, 7                 ; 8 data bits
 data_lp:
-    in pins, 1 [6]           ; sample one data bit (MSB first), ~8-cycle spacing  <<TUNE>>
+    in pins, 1 [6]           ; sample one data bit (MSB first); +jmp = 8-cycle spacing
     jmp x-- data_lp
     push noblock             ; emit [bit8 = start][bits 7..0 = byte]
     jmp byte
