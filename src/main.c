@@ -5,6 +5,7 @@
 // captured frames to SavvyCAN as format-1 records. Device timestamps (format
 // 2) and the fine clock + sequence number (format 3) come in later phases.
 #include "pico/stdlib.h"
+#include "pico/bootrom.h"
 #include "tusb.h"
 #include "config.h"
 #include "protocol.h"
@@ -12,6 +13,10 @@
 #include <string.h>
 
 static uint8_t s_record_format = PIFLEX_FMT_STOCK;
+
+// Set by the ENTER_BOOTLOADER control request; the main loop does the reset once
+// the control-status ACK has been sent, so the host sees the request succeed.
+static volatile bool s_enter_bootloader = false;
 
 // Pack a decoded frame into a format-1 record and queue it on the bulk IN pipe.
 // Layout must match SavvyCAN's PicoFlexRayParser (see protocol.h).
@@ -64,6 +69,12 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage,
         case PIFLEX_RESET_COMMS:
             return tud_control_status(rhport, req);
 
+        case PIFLEX_ENTER_BOOTLOADER:
+            // Ack now; the main loop reboots into the bootloader after the ACK
+            // has gone out. Saves a physical BOOTSEL press on every reflash.
+            s_enter_bootloader = true;
+            return tud_control_status(rhport, req);
+
         default:
             return false;                                  // stall unknown requests
     }
@@ -98,6 +109,10 @@ int main(void) {
     fr_frame_t frame;
     for (;;) {
         tud_task();
+        if (s_enter_bootloader) {
+            sleep_ms(10);          // let the control-status ACK reach the host
+            reset_usb_boot(0, 0);  // reboot into the RP2 USB mass-storage bootloader
+        }
         if (tud_vendor_mounted() && flexray_rx_poll(&frame)) {
             (void)s_record_format;   // phase 1 always emits format 1
             send_frame_fmt1(&frame);

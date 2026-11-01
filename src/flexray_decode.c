@@ -65,6 +65,12 @@ static void finish_frame(const fr_decode_t *st, uint8_t channel, fr_frame_t *out
     const uint8_t startup = out->indicators & 1;           // startup-frame indicator
     out->header_crc_ok = (flexray_header_crc(sync, startup, out->slot_id, words) == out->header_crc);
     out->frame_crc_ok  = (flexray_frame_crc(b, 5 + out->payload_len, channel) == out->frame_crc);
+#if FR_FRAME_CRC_ANY_CHANNEL
+    if (!out->frame_crc_ok) {   // single-source rig: also accept the other channel's init
+        const uint8_t other = (channel == PIFLEX_SOURCE_FR2) ? PIFLEX_SOURCE_FR1 : PIFLEX_SOURCE_FR2;
+        out->frame_crc_ok = (flexray_frame_crc(b, 5 + out->payload_len, other) == out->frame_crc);
+    }
+#endif
 }
 
 bool fr_decode_feed(fr_decode_t *st, uint32_t word, uint8_t channel, fr_frame_t *out) {

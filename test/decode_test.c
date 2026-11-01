@@ -90,11 +90,15 @@ int main(void) {
         CHECK(!h.frame_crc_ok, "frame CRC detects corruption");
     }
 
-    // 4. Per-channel init: an FR1-built frame must not validate as FR2.
+    // 4. Per-channel init: an FR1-built frame decoded as FR2.
     {
         fr_frame_t b; memset(&b, 0, sizeof b);
         CHECK(decode_stream(buf, len, PIFLEX_SOURCE_FR2, &b), "completes decoded as FR2");
+#if FR_FRAME_CRC_ANY_CHANNEL
+        CHECK(b.frame_crc_ok, "FR1 frame accepted as FR2 (any-channel init enabled)");
+#else
         CHECK(!b.frame_crc_ok, "FR1 frame fails FR2 CRC (per-channel init)");
+#endif
     }
 
     // 5. A zero-payload (null) frame round-trips.

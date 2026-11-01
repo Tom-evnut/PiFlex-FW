@@ -41,7 +41,9 @@ export PICO_SDK_PATH=/path/to/pico-sdk       # RP2350-capable SDK
 ./build.sh                                   # also honours PICO_TOOLCHAIN_PATH
 ```
 
-Flash `build/piflex_fw.uf2` via BOOTSEL.
+Flash `build/piflex_fw.uf2` via BOOTSEL. After the first flash, the host can
+re-enter the bootloader for the next reflash without touching the board by
+sending the `0xD1` vendor control request (`PIFLEX_ENTER_BOOTLOADER`).
 
 Known-good on Windows: Pico SDK (RP2350), `arm-none-eabi-gcc` 10.3 (arduino-pico
 `pqt-gcc`), CMake 3.30 + Ninja, MinGW g++ for the host tools.
@@ -79,7 +81,9 @@ vectors.
 > (init `0xFEDCBA` for channel A / FR1, `0xABCDEF` for channel B / FR2, per the
 > FlexRay spec). A signal generator that emits a channel-A CRC on a frame fed to
 > FR2 will show `frame_crc_ok = false` even though the payload is intact; this is
-> correct spec behaviour, not a decode fault.
+> correct spec behaviour, not a decode fault. For such a rig, build with
+> `-DFR_FRAME_CRC_ANY_CHANNEL=1` to accept either channel's init (off by default,
+> since it weakens wrong-channel detection on a real bus).
 
 ## License
 

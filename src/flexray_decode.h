@@ -13,6 +13,16 @@
 #define FR_MAX_PAYLOAD  254         // 127 two-byte words
 #define FR_START_FLAG   0x100u      // bit 8 of a PIO word: first byte of a frame
 
+// When set, frame_crc_ok is true if the 24-bit CRC matches EITHER channel's init
+// (0xFEDCBA / 0xABCDEF), not just this channel's. For single-source bench rigs: a
+// signal generator emits a channel-A CRC regardless of the channel it drives, so
+// strict checking would flag otherwise-intact FR2 frames. Default off = strict
+// per-channel (full FlexRay spec; catches a frame delivered on the wrong channel).
+// Enable only for such a rig, e.g. build with -DFR_FRAME_CRC_ANY_CHANNEL=1.
+#ifndef FR_FRAME_CRC_ANY_CHANNEL
+#define FR_FRAME_CRC_ANY_CHANNEL 0
+#endif
+
 // A decoded FlexRay frame.
 typedef struct {
     uint16_t slot_id;      // 11-bit frame / slot ID

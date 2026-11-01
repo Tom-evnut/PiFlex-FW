@@ -22,6 +22,7 @@
 #define PIFLEX_SET_CAN_RECORDS   0xA1  // enable interleaved CAN records (2+2 board)
 #define PIFLEX_GET_TS_INFO       0xA2  // reply identifies timestamped-capture firmware
 #define PIFLEX_RESET_COMMS       0xC0  // flush / resync the stream
+#define PIFLEX_ENTER_BOOTLOADER  0xD1  // reboot into the RP2 USB bootloader for reflash
 
 // Bulk-OUT injector ops (first byte of the OUT payload).
 #define PIFLEX_OUT_OVERRIDE      0x90  // submit a replacement slice for a rule
