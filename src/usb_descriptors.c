@@ -1,6 +1,8 @@
 // PiFlex-FW - USB descriptors. Enumerates Panda-compatible (vendor class,
 // VID 0x3801 / PID 0xDDCC, serial "picoflex...") so SavvyCAN's PicoFlexRay
-// connection binds with no host-side changes.
+// connection binds with no host-side changes. SavvyCAN binds on those keys,
+// not the product/manufacturer strings, so the product string carries the
+// firmware's own name ("PiFlex") - that is what the OS shows as the device.
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tusb.h"
 #include "protocol.h"
@@ -51,8 +53,8 @@ static char serial_str[32];
 
 static const char *const string_desc_arr[] = {
     (const char[]){0x09, 0x04},  // 0: language (English, 0x0409)
-    "comma.ai",                  // 1: manufacturer (Panda)
-    "panda",                     // 2: product
+    "comma.ai",                  // 1: manufacturer (kept Panda; not a bind key)
+    "PiFlex",                    // 2: product - the firmware name, shown by the OS
     serial_str,                  // 3: serial - filled with "picoflex" + board id
 };
 
