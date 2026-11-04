@@ -15,13 +15,15 @@ pico_sdk_init()
 add_executable(piflex_fw
     src/main.c
     src/flexray_rx.c
+    src/flexray_tx.c
     src/flexray_decode.c
     src/flexray_record.c
     src/usb_descriptors.c
 )
 
-# Assemble the FlexRay RX PIO program into a generated header.
+# Assemble the FlexRay RX and TX PIO programs into generated headers.
 pico_generate_pio_header(piflex_fw ${CMAKE_CURRENT_LIST_DIR}/src/flexray_rx.pio)
+pico_generate_pio_header(piflex_fw ${CMAKE_CURRENT_LIST_DIR}/src/flexray_tx.pio)
 
 target_include_directories(piflex_fw PRIVATE ${CMAKE_CURRENT_LIST_DIR}/src)
 

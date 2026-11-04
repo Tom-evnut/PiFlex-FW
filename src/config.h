@@ -29,6 +29,17 @@
 #define FR_BITRATE_HZ   10000000u  // 10 Mbit/s
 #define FR_OVERSAMPLE   8u         // PIO samples per bit (see flexray_rx.pio)
 
+// --- FlexRay MITM bridge (TX) ----------------------------------------------
+// The two TX state machines mirror each channel's RXD onto the other channel's
+// TXD, asserting TXEN (active-low) for each frame. See flexray_tx.pio.
+//
+// Sustained-high line length (in bit times) that marks bus idle and end-of-
+// frame. Must exceed the 9-bit worst-case in-frame high run (8 data '1's plus
+// the following BSS high bit) so a run inside a frame never looks like idle.
+// Bigger = more noise margin but a longer post-frame TXEN hold; smaller risks a
+// false frame-end on '1'-heavy data. <<TUNE>> on the bench.
+#define FR_TX_IDLE_BITS 11u
+
 // FR_MAX_PAYLOAD lives in flexray_decode.h (shared with the host-testable core).
 
 #endif // PIFLEX_CONFIG_H
