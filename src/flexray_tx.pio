@@ -9,9 +9,7 @@
 ; sees on a source RXD line onto a destination TXD line, asserting that channel's
 ; TXEN (active-LOW) for the duration of a frame so the destination transceiver
 ; drives the bus. Forwarding is UNCONDITIONAL: there is no sync / startup /
-; slot-ID gate. TXEN arms on the physical idle -> TSS pattern and releases when
-; the line returns to idle at the FES. Two SMs (FR1->FR2 and FR2->FR1) make the
-; full MITM bridge; they run independently.
+; slot-ID gate. Two SMs (FR1->FR2 and FR2->FR1) make the full MITM bridge.
 ;
 ; Pin groups (set per direction in flexray_tx_program_init):
 ;   IN / jmp pin : source RXD        (the channel we listen to; read-only)
@@ -23,70 +21,92 @@
 ;   FSS  = one high bit ; byte = BSS "10" + 8 data bits ; FES = "01" then idle.
 ;
 ; TXEN arming / release:
-;   - Require a sustained idle (>= FR_TX_IDLE_BITS consecutive highs) so we only
-;     arm at a real frame boundary, never on a high run inside a frame. The 8
-;     data bits + the following BSS high give a worst-case in-frame high run of
-;     9 bits, so the idle threshold must exceed 9 bits.
+;   - Require a sustained idle (>= FR_TX_IDLE_BITS consecutive highs, which must
+;     exceed the 9-bit worst-case in-frame high run of 8 data '1's + the next
+;     BSS high) so we only arm at a real frame boundary, never mid-frame.
 ;   - Arm on the first falling edge after idle (idle -> TSS). TXEN is asserted
-;     (SET pins 0) one-to-two SM cycles after that edge, i.e. before the first
-;     mirrored low reaches TXD, so the full TSS low run is reproduced.
-;   - The 9-bit TSS is PRODUCED by replaying the source's own 9-bit TSS verbatim:
-;     because we arm on the leading edge (not after counting TSS bits) the output
-;     TSS loses only the ~1-cycle detection latency, so a 9-bit input TSS comes
-;     out ~9 bits long. (The bench failure where a 2-bit TSS did not forward was
-;     a short TSS at the source, not shaving added here.)
-;   - Release TXEN when the line has been high for >= FR_TX_IDLE_BITS again: the
-;     FES "01" is followed by idle, so a sustained high past the 9-bit worst case
-;     marks end-of-frame. The SM then returns to idle with TXEN released (high).
+;     before the first mirrored low reaches TXD, so the full TSS is reproduced.
+;   - The 9-bit TSS is PRODUCED by replaying the source's own 9-bit TSS verbatim
+;     from its leading edge; only ~1 SM cycle of it is lost.
+;   - Release TXEN when the line has been high for >= FR_TX_IDLE_BITS again (FES
+;     "01" then idle), OR when the per-frame watchdog expires (see below).
 ;
-; TIMING: the SM runs at clk_sys (clkdiv 1.0) so the replay loop copies the line
-; with the lowest possible latency. Each pass of the replay loop is 3 (line high)
-; or 4 (line low) cycles; at 150 MHz that is a 20-27 ns copy latency, under 1/4 of
-; a 100 ns bit, so edges are reproduced faithfully. The idle/FES high threshold y
-; is a count of 3-cycle high passes, computed from FR_TX_IDLE_BITS in C.
-; Values marked <<TUNE>> are paper-derived and get trimmed on the bench.
+; ANTI-OSCILLATION (why the watchdog exists):
+;   A bidirectional repeater can hear its own output. The NCV7383 reflects TXD
+;   onto RXD while transmitting, so when BOTH directions drive at once, each SM's
+;   input is a delayed copy of its own output - a feedback loop. The idle gate
+;   stops the reverse direction from arming during a normal one-way frame (its
+;   input is busy echoing, so it never confirms idle), but it cannot stop a
+;   SIMULTANEOUS double-arm (a startup/glitch where both inputs look idle within
+;   the ~tens-of-ns arm latency). Once both are latched, a stuck-low circulating
+;   pattern never shows an idle run, so the FES detector never fires and TXEN
+;   would stay asserted forever (observed on the bench as self-sustained garbage
+;   on both channels with no bus input).
+;   The fix: a whole-frame WATCHDOG. TXEN assertion is capped at
+;   FR_TX_MAX_FRAME_BITS, just above the longest real FlexRay frame, so a real
+;   frame is never truncated. When the watchdog fires it force-releases TXEN and
+;   returns to idle. Collapsing ANY one direction breaks the loop: that channel
+;   goes idle, which removes the other direction's input signal, so the other's
+;   FES detector then fires within FR_TX_IDLE_BITS and it releases too. The
+;   watchdog guarantees that first release even for a stuck-low pattern the FES
+;   detector can never catch. Steady-state one-way traffic is unaffected (real
+;   frames are shorter than the cap and the idle gate already serialises it);
+;   only genuine simultaneous bidirectional contention - already a bus fault -
+;   gets capped.
+;
+; TIMING: the SM runs at clk_sys (clkdiv 1.0) for minimal copy latency. Each
+; replay pass is 4 (line high) or 5 (line low) cycles; at 150 MHz that is a
+; 27-33 ns copy latency, under half of a 100 ns bit, so edges are reproduced
+; faithfully. The idle/FES high threshold (ISR) and the watchdog limit (OSR) are
+; counts of 4-cycle passes, computed from the *_BITS config in C. Values marked
+; <<TUNE>> are paper-derived and get trimmed on the bench.
 
 .program flexray_tx
 
-    ; One-time setup: load the sustained-high sample threshold N into y.
-    pull block               ; OSR <- N (from the TX FIFO, pushed by C at init)
-    mov y, osr               ; y = N, the idle / end-of-frame high-pass count
+    ; One-time setup: load two constants the loop reuses every frame.
+    pull block               ; OSR <- N_high (idle/FES high-pass threshold)
+    mov isr, osr             ; ISR = N_high  (reset value for the high counters)
+    pull block               ; OSR <- watchdog limit (kept in OSR, persistent)
 
-.wrap_target
-idle:
+init_idle:
     set pins, 1              ; TXEN released (inactive high) - destination in RX
 confirm_idle:
-    mov x, y                 ; reload the high-pass counter
+    mov x, isr               ; reload the high-pass counter (x = N_high)
 confirm_lp:
     jmp pin confirm_cont     ; line still high -> keep counting toward idle
     jmp confirm_idle         ; went low too soon -> not idle yet, restart count
 confirm_cont:
-    jmp x-- confirm_lp [1]   ; N high passes (3 cycles each) -> idle confirmed
+    jmp x-- confirm_lp [2]   ; N_high high passes (4 cycles each) -> idle confirmed
     ; Line is idle-high. Wait for the TSS falling edge = start of a frame.
 wait_tss:
     jmp pin wait_tss         ; spin while high; falls through on the falling edge
     set pins, 0              ; arm: assert TXEN (drive the destination bus)
+    mov y, osr               ; y = watchdog limit (whole-frame TXEN cap)
 replay:
     mov pins, pins           ; copy source RXD -> destination TXD (one sample)
+    jmp y-- wd_ok            ; watchdog tick; expired -> force release
+    jmp init_idle            ; watchdog hit 0 -> break any feedback latch
+wd_ok:
     jmp pin high_run         ; line high? -> count it toward end-of-frame
-    mov x, y                 ; line low -> reset the high-run counter, keep going
+    mov x, isr               ; line low -> reset the high-run counter, keep going
     jmp replay
 high_run:
-    jmp x-- replay           ; still < N consecutive highs -> keep replaying
-    ; N consecutive highs -> FES + idle reached, frame over.
-.wrap                        ; back to idle: release TXEN, re-confirm idle
+    jmp x-- replay           ; still < N_high consecutive highs -> keep replaying
+    jmp init_idle            ; N_high highs -> FES + idle, release and re-confirm
 
 % c-sdk {
 #include "hardware/clocks.h"
 
 // Initialise one MITM bridge state machine.
-//   in_pin   : source RXD   (listened to; this SM does not own its GPIO funcsel)
-//   txd_pin  : destination TXD  (driven, one bit, by `mov pins, pins`)
-//   txen_pin : destination TXEN (driven by `set pins`; active-low)
-//   idle_bits: sustained-high bit count marking idle / end-of-frame (> 9).
+//   in_pin        : source RXD   (listened to; this SM does not own its funcsel)
+//   txd_pin       : destination TXD  (driven, one bit, by `mov pins, pins`)
+//   txen_pin      : destination TXEN (driven by `set pins`; active-low)
+//   idle_bits     : sustained-high bit count marking idle / end-of-frame (> 9).
+//   max_frame_bits: watchdog cap on TXEN assertion (> the longest real frame).
 static inline void flexray_tx_program_init(PIO pio, uint sm, uint offset,
                                            uint in_pin, uint txd_pin,
-                                           uint txen_pin, uint idle_bits) {
+                                           uint txen_pin, uint idle_bits,
+                                           uint max_frame_bits) {
     pio_sm_config c = flexray_tx_program_get_default_config(offset);
 
     // Source line: read by `mov pins, pins` (IN group) and by `jmp pin`.
@@ -96,8 +116,9 @@ static inline void flexray_tx_program_init(PIO pio, uint sm, uint offset,
     sm_config_set_out_pins(&c, txd_pin, 1);
     // Destination TXEN: written by `set pins`, one bit.
     sm_config_set_set_pins(&c, txen_pin, 1);
-    // Manual one-shot pull of the threshold; no autopull.
+    // Manual one-shot pulls of the two constants; no autopull/autopush.
     sm_config_set_out_shift(&c, false /* shift left */, false /* no autopull */, 32);
+    sm_config_set_in_shift(&c, false /* shift left */, false /* no autopush */, 32);
 
     // TX owns the two output pins' GPIO function. The source RXD is left to the
     // RX decoder's pio_gpio_init - a second PIO can still sample the pad input.
@@ -111,18 +132,23 @@ static inline void flexray_tx_program_init(PIO pio, uint sm, uint offset,
 
     pio_sm_init(pio, sm, offset, &c);
 
-    // Drive both outputs to their idle state (TXEN released high, TXD idle high)
-    // before the SM runs, so handing the pins to PIO cannot glitch TXEN low.
+    // Drive both outputs to idle (TXEN released high, TXD idle high) before the
+    // SM runs, so handing the pins to PIO cannot glitch TXEN low.
     pio_sm_set_pins_with_mask(pio, sm,
                               (1u << txd_pin) | (1u << txen_pin),
                               (1u << txd_pin) | (1u << txen_pin));
 
-    // Threshold N = idle_bits of high line / (3 SM cycles per high pass).
-    // high-pass time = 3 / clk_sys ; idle_bits * 100 ns must exceed it N times.
+    // Thresholds are counts of 4-cycle high passes: bits * 100 ns of line / the
+    // 4-cycle (4 / clk_sys) pass time. The watchdog uses the same 4-cycle base
+    // (the minimum pass length) so it over-estimates iterations and never clips
+    // a real frame.
     const uint32_t clk = clock_get_hz(clk_sys);
-    uint32_t n = (uint32_t)(((uint64_t)idle_bits * 100ull * clk) / 3000000000ull);
-    if (n < 1) n = 1;
-    pio_sm_put(pio, sm, n);          // consumed by the program's one-shot `pull`
+    uint32_t n_high = (uint32_t)(((uint64_t)idle_bits * 100ull * clk) / 4000000000ull);
+    uint32_t wd     = (uint32_t)(((uint64_t)max_frame_bits * 100ull * clk) / 4000000000ull);
+    if (n_high < 1) n_high = 1;
+    if (wd < 1) wd = 1;
+    pio_sm_put(pio, sm, n_high);     // first  pull -> N_high (into ISR)
+    pio_sm_put(pio, sm, wd);         // second pull -> watchdog (kept in OSR)
 
     pio_sm_set_enabled(pio, sm, true);
 }

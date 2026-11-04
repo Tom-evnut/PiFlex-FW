@@ -12,6 +12,10 @@ set(CMAKE_CXX_STANDARD 17)
 
 pico_sdk_init()
 
+# Build the MITM bridge one-way (FR2->FR1 only) for isolated forward-path bench
+# verification: cmake -DFR_BRIDGE_ONE_WAY=ON ...
+option(FR_BRIDGE_ONE_WAY "Build the FlexRay MITM bridge one-way (FR2->FR1 only)" OFF)
+
 add_executable(piflex_fw
     src/main.c
     src/flexray_rx.c
@@ -26,6 +30,10 @@ pico_generate_pio_header(piflex_fw ${CMAKE_CURRENT_LIST_DIR}/src/flexray_rx.pio)
 pico_generate_pio_header(piflex_fw ${CMAKE_CURRENT_LIST_DIR}/src/flexray_tx.pio)
 
 target_include_directories(piflex_fw PRIVATE ${CMAKE_CURRENT_LIST_DIR}/src)
+
+if(FR_BRIDGE_ONE_WAY)
+    target_compile_definitions(piflex_fw PRIVATE FR_BRIDGE_ONE_WAY=1)
+endif()
 
 target_link_libraries(piflex_fw
     pico_stdlib

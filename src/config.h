@@ -40,6 +40,18 @@
 // false frame-end on '1'-heavy data. <<TUNE>> on the bench.
 #define FR_TX_IDLE_BITS 11u
 
+// Watchdog cap on how long a forwarder may hold TXEN asserted, in bit times.
+// Must exceed the longest real FlexRay frame (TSS + FSS + 5-byte header + up to
+// 254-byte payload + 3-byte CRC + FES ~= 2640 bits) so a real frame is never
+// truncated. It exists to break the bidirectional self-oscillation latch (see
+// flexray_tx.pio "ANTI-OSCILLATION"): a stuck/looping pattern that never shows
+// an idle run is force-released here. <<TUNE>> on the bench.
+#define FR_TX_MAX_FRAME_BITS 3000u
+
+// FR_BRIDGE_ONE_WAY (define via -DFR_BRIDGE_ONE_WAY=1 or the CMake option):
+// build the bridge one-way, forwarding FR2 -> FR1 only with no reverse path, so
+// the forward-path fidelity can be bench-verified in isolation (no echo loop).
+
 // FR_MAX_PAYLOAD lives in flexray_decode.h (shared with the host-testable core).
 
 #endif // PIFLEX_CONFIG_H
