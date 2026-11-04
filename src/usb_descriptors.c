@@ -53,7 +53,7 @@ static char serial_str[32];
 
 static const char *const string_desc_arr[] = {
     (const char[]){0x09, 0x04},  // 0: language (English, 0x0409)
-    "comma.ai",                  // 1: manufacturer (kept Panda; not a bind key)
+    "OpenInv",                   // 1: manufacturer (not a bind key)
     "PiFlex",                    // 2: product - the firmware name, shown by the OS
     serial_str,                  // 3: serial - filled with "picoflex" + board id
 };
