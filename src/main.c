@@ -11,6 +11,7 @@
 #include "config.h"
 #include "protocol.h"
 #include "flexray_rx.h"
+#include "flexray_tx.h"
 #include "flexray_record.h"
 
 static uint8_t s_record_format = PIFLEX_FMT_STOCK;
@@ -85,13 +86,12 @@ int main(void) {
 
     // Pi_Flex board bring-up (mirrors the proven dynm KNOWN_GOOD sequence).
     //
-    // We are a pure sniffer and never transmit, so hold both TXEN lines INACTIVE.
-    // TXEN is active-low, so inactive = HIGH keeps each NCV7383 in receive mode and
-    // driving its RXD output; left floating the transceiver can sit in TX mode and
-    // RXD stays idle (captured nothing on the bench). KNOWN_GOOD pulls these up; we
-    // drive them high directly since we never need the PIO to assert them.
-    gpio_init(FR1_TXEN_PIN); gpio_set_dir(FR1_TXEN_PIN, GPIO_OUT); gpio_put(FR1_TXEN_PIN, 1);
-    gpio_init(FR2_TXEN_PIN); gpio_set_dir(FR2_TXEN_PIN, GPIO_OUT); gpio_put(FR2_TXEN_PIN, 1);
+    // The TXD/TXEN lines belong to the TX bridge now: flexray_tx_init() (below)
+    // takes over those four GPIOs, leaving each TXEN released (inactive HIGH, so
+    // the NCV7383 stays in receive mode and drives its RXD) until a frame arms
+    // it. TXEN must not be left floating - the transceiver can then sit in TX
+    // mode and RXD stays idle (captured nothing on the bench) - so the bridge
+    // drives both TXEN high before handing them to PIO.
 
     // Pull up the RXD inputs so the line is defined between frames (matches KNOWN_GOOD).
     gpio_pull_up(FR1_RXD_PIN);
@@ -105,6 +105,9 @@ int main(void) {
 
     tusb_init();
     flexray_rx_init();
+    // Start the MITM bit-mirror bridge. RX (pio0) keeps capturing while the
+    // bridge (pio1) repeats each channel onto the other and drives TXEN.
+    flexray_tx_init();
 
     fr_frame_t frame;
     for (;;) {

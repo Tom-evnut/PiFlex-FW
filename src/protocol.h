@@ -14,8 +14,14 @@
 #define PIFLEX_USB_VID        0x3801u
 #define PIFLEX_USB_PID        0xDDCCu
 #define PIFLEX_SERIAL_PREFIX  "picoflex"
-#define PIFLEX_EP_IN          0x81   // bulk IN: FlexRay frame stream to host
-#define PIFLEX_EP_OUT         0x01   // bulk OUT: injection ops from host
+#define PIFLEX_EP_IN          0x81   // bulk IN: FlexRay frame stream to host (EP1-IN)
+#define PIFLEX_EP_OUT         0x03   // bulk OUT: injection ops from host (EP3-OUT).
+                                     // Must be 0x03: SavvyCAN's picoflexray.cpp
+                                     // sends the injector ops (0x90/0x91) and the
+                                     // connect-time injector-disable to EP_BULK_OUT
+                                     // = 0x03, matching existing dynm devices. An
+                                     // OUT at 0x01 makes every connect log a
+                                     // LIBUSB_ERROR_NOT_FOUND write failure.
 
 // Vendor control requests (bRequest on the control endpoint).
 #define PIFLEX_SET_RECORD_FORMAT 0xA0  // wValue = 1 / 2 / 3
