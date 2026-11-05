@@ -25,43 +25,52 @@
 static PIO  s_pio = pio1;
 static uint s_sm_to_fr2, s_sm_to_fr1, s_offset;
 
-// Spare gate pin for the FR2->FR1 forwarder (FR2_RXD + 1). Held high = "other
-// direction inactive", so FR2->FR1 is not muted. Keep it a free GPIO.
+// Cross-SM gate flag for the FR2->FR1 forwarder, read at FR2_RXD + 1 = GP7.
+// In the bidirectional build the FR1->FR2 forwarder drives GP7 (via side-set) to
+// mirror its own TXEN, so FR2->FR1 is gated on "is FR1->FR2 driving FR2?" - the
+// symmetric counterpart of FR1->FR2's gate, which lands naturally on FR1_TXEN
+// (FR1_RXD+1 == FR1_TXEN). GP7 must be a free GPIO (unused on this board).
 #define FR_TX_GATE_FR2_TO_FR1  (FR2_RXD_PIN + 1u)   // GP7
 
 void flexray_tx_init(void) {
     s_offset = pio_add_program(s_pio, &flexray_tx_program);
 
-    // The FR2->FR1 forwarder reads its half-duplex gate at FR2_RXD+1 (GP7); hold
-    // it high so that direction is never spuriously muted (it runs in both the
-    // one-way and bidirectional builds).
+    // Default GP7 high (= "FR1->FR2 not driving") so the FR2->FR1 gate reads a
+    // defined level before FR1->FR2 starts, and permanently in the one-way build
+    // where FR1->FR2 is absent. In the bidirectional build FR1->FR2's side-set
+    // then takes over driving GP7.
     gpio_init(FR_TX_GATE_FR2_TO_FR1);
-    gpio_set_dir(FR_TX_GATE_FR2_TO_FR1, GPIO_IN);
     gpio_pull_up(FR_TX_GATE_FR2_TO_FR1);
+    gpio_set_dir(FR_TX_GATE_FR2_TO_FR1, GPIO_IN);
 
 #ifdef FR_BRIDGE_ONE_WAY
     // One-way bridge: FR2 -> FR1 only. FR2 is the listened input, so keep its
     // TXEN released (high) directly - the reverse forwarder is not started, so
     // nothing drives FR2 and there is no echo loop to oscillate. Lets the bench
-    // verify forward-path fidelity (generator on FR2, BM listener on FR1).
+    // verify forward-path fidelity (generator on FR2, BM listener on FR1). GP7
+    // stays pulled high, so this direction is ungated (there is no echo source).
     gpio_init(FR2_TXEN_PIN); gpio_put(FR2_TXEN_PIN, 1); gpio_set_dir(FR2_TXEN_PIN, GPIO_OUT);
 
     s_sm_to_fr1 = pio_claim_unused_sm(s_pio, true);
+    // flag_pin = its own TXEN (redundant side-set; no second SM reads it here).
     flexray_tx_program_init(s_pio, s_sm_to_fr1, s_offset,
-                            FR2_RXD_PIN, FR1_TXD_PIN, FR1_TXEN_PIN,
+                            FR2_RXD_PIN, FR1_TXD_PIN, FR1_TXEN_PIN, FR1_TXEN_PIN,
                             FR_TX_IDLE_BITS);
 #else
     s_sm_to_fr2 = pio_claim_unused_sm(s_pio, true);
     s_sm_to_fr1 = pio_claim_unused_sm(s_pio, true);
 
-    // FR1 -> FR2: listen on FR1 RXD, drive FR2 TXD + FR2 TXEN. Its gate pin is
-    // FR1_RXD+1 = FR1_TXEN, asserted by the FR2->FR1 forwarder below.
+    // FR1 -> FR2: listen FR1 RXD, drive FR2 TXD + FR2 TXEN. Gate = FR1_RXD+1 =
+    // FR1_TXEN (FR2->FR1's TXEN). flag_pin = GP7: side-set mirrors this SM's TXEN
+    // onto GP7 so FR2->FR1 can gate on it.
     flexray_tx_program_init(s_pio, s_sm_to_fr2, s_offset,
                             FR1_RXD_PIN, FR2_TXD_PIN, FR2_TXEN_PIN,
-                            FR_TX_IDLE_BITS);
-    // FR2 -> FR1: listen on FR2 RXD, drive FR1 TXD + FR1 TXEN.
+                            FR_TX_GATE_FR2_TO_FR1, FR_TX_IDLE_BITS);
+    // FR2 -> FR1: listen FR2 RXD, drive FR1 TXD + FR1 TXEN. Gate = FR2_RXD+1 =
+    // GP7 (driven above). flag_pin = its own TXEN (redundant; FR1->FR2 reads the
+    // real FR1_TXEN at FR1_RXD+1).
     flexray_tx_program_init(s_pio, s_sm_to_fr1, s_offset,
-                            FR2_RXD_PIN, FR1_TXD_PIN, FR1_TXEN_PIN,
+                            FR2_RXD_PIN, FR1_TXD_PIN, FR1_TXEN_PIN, FR1_TXEN_PIN,
                             FR_TX_IDLE_BITS);
 #endif
 }

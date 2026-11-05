@@ -77,11 +77,19 @@
 
 .program flexray_tx
 
+; Optional side-set drives the FLAG pin in lock-step with TXEN, mirroring this
+; SM's transmit-active state onto the pin the OTHER direction reads as its gate.
+; For FR1->FR2 the flag pin IS the far side's gate (FR2_RXD+1 = GP7); for FR2->FR1
+; the flag pin is its own TXEN (redundant), so the far side already reads it on
+; FR1_RXD+1 = FR1_TXEN. Side-set rides in the instruction's delay field, so it
+; adds no cycles - the byte-exact replay copy is untouched.
+.side_set 1 opt
+
     pull block               ; OSR <- N_HIGH (idle/FES high-pass count, from C)
     mov isr, osr             ; ISR = N_HIGH (reload source for x)
 
 init_idle:
-    set pins, 1              ; TXEN released (inactive high) - destination in RX
+    set pins, 1    side 1    ; TXEN released (inactive high); flag high = not driving
 confirm_idle:
     set x, 27                ; idle/refractory passes (~11 bits at this 6-cycle
                              ; confirm loop; keep <= the min inter-frame gap so a
@@ -113,7 +121,7 @@ wait_tss:
     mov osr, ~null           ; OSR = 0xFFFFFFFF
     out null, 18             ; keep 14 bits -> 0x3FFF = 16383 passes  <<TUNE>>
     mov y, osr               ; y = watchdog limit (whole-frame TXEN cap)
-    set pins, 0              ; assert TXEN (drive the destination bus)
+    set pins, 0    side 0    ; assert TXEN (drive the bus); flag low = driving
     mov x, isr               ; reset the high-run counter for the frame
 replay:
     mov pins, pins           ; copy source RXD -> destination TXD (one sample)
@@ -135,10 +143,15 @@ high_run:
 //              The half-duplex gate pin is in_pin + 1 (read at arm).
 //   txd_pin  : destination TXD  (driven, one bit, by `mov pins, pins`)
 //   txen_pin : destination TXEN (driven by `set pins`; active-low)
+//   flag_pin : side-set output mirroring this SM's TXEN (active-low) so the OTHER
+//              direction can read it as its gate at the other channel's IN+1.
+//              For FR1->FR2 this is the far gate GP7; for FR2->FR1 it is its own
+//              TXEN (redundant, the far side reads the real TXEN pin).
 //   idle_bits: sustained-high bit count marking idle / end-of-frame (> 9).
 static inline void flexray_tx_program_init(PIO pio, uint sm, uint offset,
                                            uint in_pin, uint txd_pin,
-                                           uint txen_pin, uint idle_bits) {
+                                           uint txen_pin, uint flag_pin,
+                                           uint idle_bits) {
     pio_sm_config c = flexray_tx_program_get_default_config(offset);
 
     // Source line + gate: `mov pins, pins` copies IN_base (RXD); `mov osr, pins`
@@ -149,27 +162,30 @@ static inline void flexray_tx_program_init(PIO pio, uint sm, uint offset,
     sm_config_set_out_pins(&c, txd_pin, 1);
     // Destination TXEN: written by `set pins`, one bit.
     sm_config_set_set_pins(&c, txen_pin, 1);
+    // Flag: side-set drives flag_pin in lock-step with TXEN (the far gate).
+    sm_config_set_sideset_pins(&c, flag_pin);
     // OUT shifts right (LSB first) so the gate extraction discards RXD then reads
     // the gate bit. No autopull/autopush - N_HIGH is pulled once.
     sm_config_set_out_shift(&c, true /* shift right */, false /* no autopull */, 32);
 
-    // TX owns the two output pins' GPIO function. The source RXD is left to the
-    // RX decoder's pio_gpio_init - a second PIO can still sample the pad input.
+    // TX owns the output pins' GPIO function. The source RXD is left to the RX
+    // decoder's pio_gpio_init - a second PIO can still sample the pad input.
     pio_gpio_init(pio, txd_pin);
     pio_gpio_init(pio, txen_pin);
+    pio_gpio_init(pio, flag_pin);
     pio_sm_set_consecutive_pindirs(pio, sm, txd_pin, 1, true /* output */);
     pio_sm_set_consecutive_pindirs(pio, sm, txen_pin, 1, true /* output */);
+    pio_sm_set_consecutive_pindirs(pio, sm, flag_pin, 1, true /* output */);
 
     // Run at the full system clock for the lowest copy latency (see header).
     sm_config_set_clkdiv(&c, 1.0f);
 
     pio_sm_init(pio, sm, offset, &c);
 
-    // Drive both outputs to idle (TXEN released high, TXD idle high) before the
-    // SM runs, so handing the pins to PIO cannot glitch TXEN low.
-    pio_sm_set_pins_with_mask(pio, sm,
-                              (1u << txd_pin) | (1u << txen_pin),
-                              (1u << txd_pin) | (1u << txen_pin));
+    // Drive outputs to idle (TXEN released high, TXD idle high, flag high = not
+    // driving) before the SM runs, so handing the pins to PIO cannot glitch low.
+    const uint32_t idle_mask = (1u << txd_pin) | (1u << txen_pin) | (1u << flag_pin);
+    pio_sm_set_pins_with_mask(pio, sm, idle_mask, idle_mask);
 
     // N_HIGH in replay passes (~4 cycles each): idle_bits of 100 ns line /
     // (4 / clk_sys). Full register value (not a set immediate), so the copy loop
