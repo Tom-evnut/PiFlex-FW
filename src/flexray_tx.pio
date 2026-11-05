@@ -55,6 +55,13 @@
 ;   FR2->FR1 forwarder's TXEN. (For FR2->FR1 the gate pin is a spare GPIO held
 ;   high by C = not muted; driving it from the FR1->FR2 TXEN would complete the
 ;   symmetric reverse gate - a documented follow-up.)
+;   REFRACTORY (stops re-circulation / ping-pong): the gate is checked not just at
+;   arm but throughout idle-confirm - the gate must stay high for the whole confirm
+;   window before we arm. The other direction's TXEN only goes high when it RELEASES,
+;   so the readback of a frame this bridge just forwarded (which re-triggers right
+;   after FES) is skipped: the gate has not been high long enough. A genuine new
+;   frame comes from a real node with the gate high throughout, so it still forwards
+;   - that is how the echo is told apart from real back-to-back slot traffic.
 ;
 ; ANTI-OSCILLATION watchdog (safety backstop):
 ;   The gate cannot stop a simultaneous double-arm (both directions arming within
@@ -76,18 +83,30 @@
 init_idle:
     set pins, 1              ; TXEN released (inactive high) - destination in RX
 confirm_idle:
-    mov x, isr               ; reload the high-pass counter (x = N_HIGH)
+    set x, 27                ; idle/refractory passes (~11 bits at this 6-cycle
+                             ; confirm loop; keep <= the min inter-frame gap so a
+                             ; real next frame is not dropped). <<TUNE>>
 confirm_lp:
-    jmp pin confirm_cont     ; line still high -> keep counting toward idle
-    jmp confirm_idle         ; went low too soon -> not idle yet, restart count
-confirm_cont:
-    jmp x-- confirm_lp [2]   ; 4-cycle high pass (matches replay) -> idle confirmed
+    jmp pin confirm_gate     ; line high -> also require the gate high (refractory)
+    jmp confirm_idle         ; line low -> not idle yet, restart the count
+confirm_gate:
+    ; REFRACTORY: require the gate pin (IN_base + 1) high for the whole confirm
+    ; window, not just at arm. The gate is the other direction's TXEN (active-low);
+    ; it only goes high once that direction RELEASES, so a frame this bridge just
+    ; forwarded is still reading back while the gate has not yet been high long
+    ; enough -> we skip our own echo. A genuine new frame on this channel comes
+    ; from a real node with the gate high throughout, so it is NOT skipped.
+    mov osr, pins            ; sample pins (bit0 = RXD, bit1 = gate)
+    out null, 1              ; drop the RXD bit (OUT shifts right, LSB first)
+    out y, 1                 ; y = gate bit
+    jmp !y confirm_idle      ; gate low (other driving / just released) -> restart
+    jmp x-- confirm_lp       ; RXD high AND gate high -> count toward confirmed
 wait_tss:
     jmp pin wait_tss         ; spin while high; falls through on the falling edge
-    ; HALF-DUPLEX gate: extract the pin at IN_base + 1. RXD (IN_base) is low here
-    ; (we just saw the falling edge), so OUT-right discards it and reads the gate.
+    ; Final gate recheck at the TSS edge (closes the confirm->arm race): extract
+    ; the pin at IN_base + 1. RXD (IN_base) is low here, so OUT-right discards it.
     mov osr, pins            ; OSR bit0 = RXD (low), bit1 = gate
-    out null, 1              ; drop the RXD bit (OUT shifts right, LSB first)
+    out null, 1              ; drop the RXD bit
     out x, 1                 ; x = gate bit
     jmp !x init_idle         ; gate low -> other direction active -> stay muted
     ; We win the bridge. Build the watchdog and arm.
