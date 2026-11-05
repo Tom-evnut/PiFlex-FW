@@ -33,12 +33,10 @@
 // The two TX state machines mirror each channel's RXD onto the other channel's
 // TXD, asserting TXEN (active-low) for each frame. See flexray_tx.pio.
 //
-// Sustained-high line length (in bit times) that marks bus idle and end-of-
-// frame. Must exceed the 9-bit worst-case in-frame high run (8 data '1's plus
-// the following BSS high bit) so a run inside a frame never looks like idle.
-// Bigger = more noise margin but a longer post-frame TXEN hold; smaller risks a
-// false frame-end on '1'-heavy data. <<TUNE>> on the bench.
-#define FR_TX_IDLE_BITS 11u
+// The sustained-high idle / end-of-frame threshold is the N_HIGH literal in
+// flexray_tx.pio (it must be a PIO `set` immediate, <=31), not a value here: it
+// must exceed the 9-bit worst-case in-frame high run (8 data '1's + the next
+// BSS high) and is <<TUNE>>d on the bench.
 
 // Watchdog cap on how long a forwarder may hold TXEN asserted, in bit times.
 // Must exceed the longest real FlexRay frame (TSS + FSS + 5-byte header + up to
