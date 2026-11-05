@@ -33,18 +33,15 @@
 // The two TX state machines mirror each channel's RXD onto the other channel's
 // TXD, asserting TXEN (active-low) for each frame. See flexray_tx.pio.
 //
-// The sustained-high idle / end-of-frame threshold is the N_HIGH literal in
-// flexray_tx.pio (it must be a PIO `set` immediate, <=31), not a value here: it
-// must exceed the 9-bit worst-case in-frame high run (8 data '1's + the next
-// BSS high) and is <<TUNE>>d on the bench.
+// Sustained-high line length (in bit times) that marks bus idle / end-of-frame.
+// Must exceed the 9-bit worst-case in-frame high run (8 data '1's + the next BSS
+// high) so a run inside a frame never looks like idle. C turns this into the
+// replay-pass count the PIO counts (see flexray_tx_program_init). <<TUNE>>.
+#define FR_TX_IDLE_BITS 11u
 
-// Watchdog cap on how long a forwarder may hold TXEN asserted, in bit times.
-// Must exceed the longest real FlexRay frame (TSS + FSS + 5-byte header + up to
-// 254-byte payload + 3-byte CRC + FES ~= 2640 bits) so a real frame is never
-// truncated. It exists to break the bidirectional self-oscillation latch (see
-// flexray_tx.pio "ANTI-OSCILLATION"): a stuck/looping pattern that never shows
-// an idle run is force-released here. <<TUNE>> on the bench.
-#define FR_TX_MAX_FRAME_BITS 3000u
+// Note: the anti-oscillation watchdog (whole-frame TXEN cap) is built inside the
+// PIO program from a shifted constant - see flexray_tx.pio - so it needs no value
+// here. It only has to exceed the longest real frame (~2640 bits).
 
 // FR_BRIDGE_ONE_WAY (define via -DFR_BRIDGE_ONE_WAY=1 or the CMake option):
 // build the bridge one-way, forwarding FR2 -> FR1 only with no reverse path, so

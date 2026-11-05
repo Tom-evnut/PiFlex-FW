@@ -49,7 +49,7 @@ void flexray_tx_init(void) {
     s_sm_to_fr1 = pio_claim_unused_sm(s_pio, true);
     flexray_tx_program_init(s_pio, s_sm_to_fr1, s_offset,
                             FR2_RXD_PIN, FR1_TXD_PIN, FR1_TXEN_PIN,
-                            FR_TX_MAX_FRAME_BITS);
+                            FR_TX_IDLE_BITS);
 #else
     s_sm_to_fr2 = pio_claim_unused_sm(s_pio, true);
     s_sm_to_fr1 = pio_claim_unused_sm(s_pio, true);
@@ -58,10 +58,10 @@ void flexray_tx_init(void) {
     // FR1_RXD+1 = FR1_TXEN, asserted by the FR2->FR1 forwarder below.
     flexray_tx_program_init(s_pio, s_sm_to_fr2, s_offset,
                             FR1_RXD_PIN, FR2_TXD_PIN, FR2_TXEN_PIN,
-                            FR_TX_MAX_FRAME_BITS);
+                            FR_TX_IDLE_BITS);
     // FR2 -> FR1: listen on FR2 RXD, drive FR1 TXD + FR1 TXEN.
     flexray_tx_program_init(s_pio, s_sm_to_fr1, s_offset,
                             FR2_RXD_PIN, FR1_TXD_PIN, FR1_TXEN_PIN,
-                            FR_TX_MAX_FRAME_BITS);
+                            FR_TX_IDLE_BITS);
 #endif
 }
