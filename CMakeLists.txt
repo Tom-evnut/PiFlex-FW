@@ -16,6 +16,11 @@ pico_sdk_init()
 # verification: cmake -DFR_BRIDGE_ONE_WAY=ON ...
 option(FR_BRIDGE_ONE_WAY "Build the FlexRay MITM bridge one-way (FR2->FR1 only)" OFF)
 
+# Build the phase-4 injector: regenerate FR2->FR1 frames (splicing a host
+# override) instead of the verbatim bit-mirror, so a payload byte can be changed
+# with a recomputed CRC. cmake -DFR_INJECT=ON ...  (see src/flexray_inject_tx.c).
+option(FR_INJECT "Build the FlexRay injector (regenerate FR2->FR1, splice overrides)" OFF)
+
 add_executable(piflex_fw
     src/main.c
     src/flexray_rx.c
@@ -23,17 +28,24 @@ add_executable(piflex_fw
     src/flexray_decode.c
     src/flexray_record.c
     src/flexray_injector.c
+    src/flexray_inject_build.c
+    src/flexray_inject_tx.c
     src/usb_descriptors.c
 )
 
-# Assemble the FlexRay RX and TX PIO programs into generated headers.
+# Assemble the FlexRay RX, TX-mirror and TX-inject PIO programs into headers.
 pico_generate_pio_header(piflex_fw ${CMAKE_CURRENT_LIST_DIR}/src/flexray_rx.pio)
 pico_generate_pio_header(piflex_fw ${CMAKE_CURRENT_LIST_DIR}/src/flexray_tx.pio)
+pico_generate_pio_header(piflex_fw ${CMAKE_CURRENT_LIST_DIR}/src/flexray_inject.pio)
 
 target_include_directories(piflex_fw PRIVATE ${CMAKE_CURRENT_LIST_DIR}/src)
 
 if(FR_BRIDGE_ONE_WAY)
     target_compile_definitions(piflex_fw PRIVATE FR_BRIDGE_ONE_WAY=1)
+endif()
+
+if(FR_INJECT)
+    target_compile_definitions(piflex_fw PRIVATE FR_INJECT=1)
 endif()
 
 target_link_libraries(piflex_fw

@@ -14,6 +14,9 @@
 #include "flexray_tx.h"
 #include "flexray_record.h"
 #include "flexray_injector.h"
+#ifdef FR_INJECT
+#include "flexray_inject_tx.h"
+#endif
 
 static uint8_t s_record_format = PIFLEX_FMT_STOCK;
 
@@ -133,9 +136,17 @@ int main(void) {
     tusb_init();
     fr_inject_reset();   // SAFETY: injector OFF until the host enables it (op 0x91)
     flexray_rx_init();
+#ifdef FR_INJECT
+    // Injector build: instead of the verbatim FR2->FR1 bit-mirror, regenerate
+    // each FR2 frame on FR1 (splicing a matched override) so a payload byte can
+    // be changed with a valid recomputed CRC. The inject SM is the sole driver
+    // of FR1 TXD/TXEN, so there is no PIO contention. See flexray_inject_tx.c.
+    flexray_inject_tx_init();
+#else
     // Start the MITM bit-mirror bridge. RX (pio0) keeps capturing while the
     // bridge (pio1) repeats each channel onto the other and drives TXEN.
     flexray_tx_init();
+#endif
 
     fr_frame_t frame;
     for (;;) {
@@ -146,8 +157,12 @@ int main(void) {
         }
         if (tud_vendor_mounted()) {
             poll_injector_out();                 // drain EP 0x03 injector ops
-            if (flexray_rx_poll(&frame))
-                send_frame(&frame);
+            if (flexray_rx_poll(&frame)) {
+                send_frame(&frame);              // stream the captured frame to the host
+#ifdef FR_INJECT
+                flexray_inject_forward(&frame);  // regenerate FR2->FR1, splicing a match
+#endif
+            }
         }
     }
 }

@@ -51,13 +51,18 @@ Known-good on Windows: Pico SDK (RP2350), `arm-none-eabi-gcc` 10.3 (arduino-pico
 ## Tests
 
 The SDK-free cores have host round-trip tests that need only a host compiler (no
-Pico SDK): `decode_test` exercises framing + CRCs, and `record_test` checks the
-USB record layout against SavvyCAN's parser offsets for every format.
+Pico SDK): `decode_test` exercises framing + CRCs, `record_test` checks the USB
+record layout against SavvyCAN's parser offsets for every format, `injector_test`
+checks the injector control plane (E2E CRC-8, op `0x90`/`0x91` framing, rule
+matching), and `inject_build_test` rebuilds an injected frame and decodes it back
+to prove the splice + recomputed 24-bit CRC validate.
 
 ```sh
 cd test
 gcc -I ../src decode_test.c ../src/flexray_decode.c -o decode_test && ./decode_test
 gcc -I ../src record_test.c ../src/flexray_record.c ../src/flexray_decode.c -o record_test && ./record_test
+gcc -I ../src injector_test.c ../src/flexray_injector.c -o injector_test && ./injector_test
+gcc -I ../src inject_build_test.c ../src/flexray_inject_build.c ../src/flexray_decode.c -o inject_build_test && ./inject_build_test
 ```
 
 ## Status (phase 1)
@@ -67,7 +72,7 @@ gcc -I ../src record_test.c ../src/flexray_record.c ../src/flexray_decode.c -o r
 | 1 | FlexRay sniffer → format-1 stream over USB | **working on hardware** — captures FlexRay end-to-end on a Pi_Flex V1 bench board: 3 slots decode byte-exact, cycles 0–63, ~540 fps, 0 resync skips; enumerates as panda; PIO sample timing tuned against a logic capture; frame CRC validated against standard vectors |
 | 2 | Device timestamps (format 2) + per-frame sequence (format 3) | **working on hardware** — emits format 2 (device µs + CRC flags) and format 3 (+ a sequence number that exposes USB-FIFO loss) on the host's `SET_RECORD_FORMAT` request. Bench-verified on a Pi_Flex V1 board: format-3 records decode byte-exact, the device clock and sequence number advance per frame, and `frame_crc_ok`/`header_crc_ok` now reach the host both set and clear. The fine clock is sent as zero (the timestamp is read in software at dequeue, not latched in hardware), so the hardware-timestamp flag stays clear |
 | 3 | MITM pass-through (both transceivers, per-frame TXEN, 9-bit TSS) | **working on hardware** — bit-mirror bridge: each channel's frames are repeated onto the other with a 9-bit TSS and per-frame TXEN, via a per-direction TX replay PIO. Bench-verified on a Pi_Flex V1 board: steady-state bidirectional bridging is byte-exact (independent far-side listener 100% on all three slots), zero dropped frames, RX capture uncompromised while bridging. A symmetric cross-direction gate + per-frame TXEN watchdog suppress the transceiver's own TXD→RXD echo (the NCV7383 can't blank RxD during TX, so this is handled in firmware). Known characteristic: abruptly cutting the source mid-stream leaves a brief (~1–2 s) self-quenching echo of the in-flight frames before the bus settles to idle; a continuously-running bus doesn't trigger it. Build `-DFR_BRIDGE_ONE_WAY=ON` for isolated forward-path testing |
-| 4 | Injector (`0x90`/`0x91`, E2E CRC-8) | planned |
+| 4 | Injector (`0x90`/`0x91`, E2E CRC-8) | **implemented, bench-pending** — SavvyCAN drives a payload override on the MITM bridge. Control plane on bulk-OUT EP `0x03`: op `0x91` toggles a global injector-enable (OFF at power-up for safety; the host pushes the desired state on connect), op `0x90` submits a replacement slice `[E2E CRC-8 (AUTOSAR, poly 0x1D, init 0xF1)][payload]` for a slot, verified against the CRC and a static allow-list of injectable slots + replace windows (`src/flexray_injector_rules.h`; ships sample rules for the bench generator's slots `0x001`/`0x002`/`0x004`). TX path (`-DFR_INJECT=ON`): a matched frame is decoded, the override window is spliced into the payload, the 24-bit frame CRC is recomputed, and the frame is re-emitted on FR1 via a dedicated FlexRay TX PIO — store-and-forward (~1 frame of latency), as an in-flight bit-mirror cannot change a byte and recompute the trailing CRC in the same slot (zero-latency cut-through is the documented follow-up). Control plane + splice + CRC-recompute are host-tested; the TX emit PIO awaits bench bring-up (bit-centre alignment, slot timing, real injection confirmed on the far-side listener). Default and `-DFR_BRIDGE_ONE_WAY=ON` builds keep the phase-3 bit-mirror unchanged |
 | 5 | Source / generator mode | planned |
 | 6 | CAN + the 2× CAN / 2× FlexRay board (`can2040`) | planned |
 
