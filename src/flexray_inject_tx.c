@@ -58,11 +58,11 @@ static PIO  s_pio = pio1;
 static uint s_sm, s_offset;
 static int  s_dma = -1;
 
-// One frame as TX FIFO words: word 0 = byte count N, words 1..N = each data byte
-// left-justified (byte << 24). A whole frame far exceeds the 8-deep PIO FIFO, so
-// DMA streams it into the FIFO paced by the SM's TX DREQ. Sized for the largest
-// frame (header + max payload + CRC) plus the count word.
-static uint32_t s_txwords[1 + FR_INJECT_FRAME_MAX];
+// One frame serialised for the PIO transmitter: word 0 = total_bits-1, words
+// 1.. = the on-wire bit stream packed MSB-first (fr_inject_serialize). A frame's
+// bit stream far exceeds the 8-deep PIO FIFO, so DMA streams it into the FIFO
+// paced by the SM's TX DREQ. Sized for the largest frame.
+static uint32_t s_txwords[FR_INJECT_WORDS_MAX];
 
 void flexray_inject_tx_init(void) {
     // Listened (source) channel FR2 stays in receive: release its TXEN (high).
@@ -88,20 +88,20 @@ void flexray_inject_tx_init(void) {
                           0, false);           // count set per frame; don't start yet
 }
 
-// Stream a rebuilt frame to the transmitter via DMA. Drops the frame if the
-// previous one is still transmitting (the DMA channel is busy), so a slow bus
-// never wedges the capture loop - store-and-forward injection already accepts
-// that an occasional frame is not reproduced.
-static void send_bytes(const uint8_t *bytes, int len) {
+// Serialise a rebuilt frame to the FlexRay line coding and stream it to the
+// transmitter via DMA. Drops the frame if the previous one is still
+// transmitting (the DMA channel is busy), so a slow bus never wedges the capture
+// loop - store-and-forward injection already accepts that an occasional frame is
+// not reproduced.
+static void emit_frame(const uint8_t *bytes, int len) {
     if (len < 1 || s_dma < 0) return;
     if (dma_channel_is_busy((uint)s_dma)) return;   // previous frame still going -> drop
 
-    s_txwords[0] = (uint32_t)len;
-    for (int i = 0; i < len; i++)
-        s_txwords[1 + i] = (uint32_t)bytes[i] << 24;
+    const int words = fr_inject_serialize(s_txwords, bytes, len);
+    if (words <= 0) return;
 
     dma_channel_set_read_addr((uint)s_dma, s_txwords, false);
-    dma_channel_set_trans_count((uint)s_dma, (uint32_t)(1 + len), true /* trigger */);
+    dma_channel_set_trans_count((uint)s_dma, (uint32_t)words, true /* trigger */);
 }
 
 bool flexray_inject_forward(const fr_frame_t *f) {
@@ -118,6 +118,6 @@ bool flexray_inject_forward(const fr_frame_t *f) {
     const int n = fr_inject_build_frame(frame, f, data, off, len);
     if (n <= 0) return false;   // window did not fit -> nothing emitted this frame
 
-    send_bytes(frame, n);
+    emit_frame(frame, n);
     return true;
 }

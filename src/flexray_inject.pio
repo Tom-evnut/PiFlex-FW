@@ -19,50 +19,35 @@
 ;   byte  = BSS ("10": one high then one low) + 8 data bits, MSB first
 ;   FES   = "01" (one low then one high), then idle high + TXEN released
 ;
-; FIFO protocol (little work for the CPU, see flexray_inject_tx_send):
-;   word 0      = N, the number of data bytes in the frame (>= 1)
-;   words 1..N  = one data byte each, left-justified (byte << 24) so the MSB
-;                 shifts out first under a left-shifting OSR.
+; FIFO protocol (ALL framing is done on the CPU by fr_inject_serialize, so this
+; program is a uniform bit shifter with no per-byte control flow in the bit
+; stream - that is what keeps every bit exactly 2 cycles and the receiver's
+; per-BSS resync aligned):
+;   word 0    = total_bits - 1   (the bit-loop counter)
+;   words 1.. = the on-wire bit stream, packed MSB-first (first bit emitted is
+;               bit 31 of word 1); loaded by autopull, so no `pull` ever sits in
+;               the bit stream to stretch a bit.
 ;
 ; TIMING: the SM runs at 2 cycles per FlexRay bit (clkdiv = clk_sys /
-; (FR_BITRATE_HZ*2)); every bit below is exactly 2 PIO cycles (a one-op bit uses
-; [1]; a two-op loop body is 1+1). Bit-centre alignment against the RX sampler is
-; a bench trim (logic-analyser), like the RX/TX <<TUNE>> points - the injected
-; frame must land in its own slot window for a real FlexRay node to accept it.
+; (FR_BITRATE_HZ*2)). The bit loop is `out pins,1` (1 cyc, drives the bit) +
+; `jmp x--` (1 cyc, holds it) = exactly 2 cyc/bit, identical for every bit - TSS,
+; FSS, BSS, data and FES alike - so there is no accumulating phase error and the
+; receiver, which relocks on each BSS falling edge and samples 1.5 bits later,
+; lands on every data-bit centre. Absolute bit-centre trim vs the sampler stays a
+; bench check (logic-analyser), like the RX/TX <<TUNE>> points.
 
 .program flexray_inject
 .side_set 1 opt                 ; side-set drives TXEN: side 0 = assert (drive), 1 = release
 
 .wrap_target
 idle:
-    pull block        side 1    ; wait for a frame; word 0 = byte count N. TXEN released.
-    mov y, osr                  ; y = N (bytes still to send)
-
-    ; --- TSS: a run of low bits --- assert TXEN for the whole frame (side 0).
-    set x, 6          side 0    ; (FR_TX_IDLE_BITS-2-1) lows via the loop below  <<BENCH>>
-tss_lp:
-    set pins, 0                 ; drive low (1 cyc)
-    jmp x-- tss_lp              ; (1 cyc) => 2 cyc/bit
-    ; --- FSS: one high bit ---
-    set pins, 1       [1]       ; FSS high (2 cyc)
-
-byte_lp:
-    jmp !y fes                  ; no bytes left -> frame end
-    pull block                  ; OSR = next data byte (byte << 24, MSB first)
-    ; --- BSS: high then low ---
-    set pins, 1       [1]       ; BSS high bit
-    set pins, 0       [1]       ; BSS low bit
-    ; --- 8 data bits, MSB first ---
-    set x, 7
-data_lp:
-    out pins, 1                 ; one data bit (1 cyc)
-    jmp x-- data_lp             ; (1 cyc) => 2 cyc/bit
-    jmp y-- byte_lp             ; one byte done; loop while bytes remain
-
-fes:
-    ; --- FES: low then high, then idle (TXEN released on the next pull). ---
-    set pins, 0       [1]       ; FES low bit
-    set pins, 1       [1]       ; FES high bit, then line idles high
+    pull block        side 1    ; wait for a frame; word 0 = total_bits-1. TXEN released.
+    mov x, osr        side 1    ; x = bit counter
+    out null, 32      side 1    ; flush the count from OSR so autopull loads word 1 next
+bit_lp:
+    out pins, 1       side 0    ; drive one bit (1 cyc); TXEN asserted for the frame
+    jmp x-- bit_lp              ; hold it (1 cyc) => 2 cyc/bit; next bit autopulls as needed
+    set pins, 1       side 1    ; last bit sent -> idle high, TXEN released
 .wrap
 
 % c-sdk {
@@ -79,13 +64,14 @@ static inline void flexray_inject_program_init(PIO pio, uint sm, uint offset,
                                                uint txd_pin, uint txen_pin) {
     pio_sm_config c = flexray_inject_program_get_default_config(offset);
 
-    // TXD is written by both `set` and `out` (fixed framing bits vs data bits).
+    // TXD is written by `out` (every stream bit) and by `set` (the idle high
+    // between frames). TXEN via side-set.
     sm_config_set_set_pins(&c, txd_pin, 1);
     sm_config_set_out_pins(&c, txd_pin, 1);
-    // TXEN via side-set.
     sm_config_set_sideset_pins(&c, txen_pin);
-    // Shift left so the first data bit out of each byte is its MSB; explicit pull.
-    sm_config_set_out_shift(&c, false /* shift left */, false /* no autopull */, 32);
+    // Shift left so the first serialized bit (bit 31) goes out first; autopull at
+    // 32 refills OSR transparently (no `pull` in the bit stream to stretch a bit).
+    sm_config_set_out_shift(&c, false /* shift left */, true /* autopull */, 32);
 
     pio_gpio_init(pio, txd_pin);
     pio_gpio_init(pio, txen_pin);

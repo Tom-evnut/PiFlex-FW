@@ -87,6 +87,57 @@ static void inject_case(uint8_t channel, uint16_t slot, uint8_t cycle,
     if (changed) CHECK(got.frame_crc != orig_crc, "frame CRC changes when payload changes");
 }
 
+// Extract on-wire bit i (0 = first bit emitted), MSB-first from the serialized
+// words (words[1..]; words[0] is the count word).
+static int bit_at(const uint32_t *w, int i) {
+    return (int)((w[1 + (i >> 5)] >> (31 - (i & 31))) & 1u);
+}
+
+// Serialize a built frame and decode the bit stream straight back per the
+// FlexRay line coding, pinning the full on-wire framing - the TSS/FSS/BSS/FES
+// structure, the header length field as it reaches the wire, and the emitted
+// word count. This is the layer the bench found broken; a regression here now
+// fails on the host.
+static void test_serialize(void) {
+    const uint8_t payload[8] = {0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11}; // bench-like
+    fr_frame_t f;
+    make_frame(&f, PIFLEX_SOURCE_FR2, 0x001, 5, payload, (int)sizeof payload);
+
+    uint8_t frame[FR_INJECT_FRAME_MAX];
+    const int n = fr_inject_build_frame(frame, &f, NULL, 0, 0);   // verbatim rebuild
+    CHECK(n == 5 + 8 + 3, "built frame is header + 8 payload + CRC");
+    CHECK(((frame[2] >> 1) & 0x7F) == 4, "header length field encodes 4 words (8-byte payload)");
+
+    uint32_t words[FR_INJECT_WORDS_MAX];
+    const int nw = fr_inject_serialize(words, frame, n);
+    const int total_bits = (int)words[0] + 1;
+    const int exp_bits   = FR_INJECT_TSS_BITS + 1 + 10 * n + 2;
+    CHECK(total_bits == exp_bits, "total bit count = TSS + FSS + 10/byte + FES");
+    CHECK(nw == 1 + (exp_bits + 31) / 32, "emitted word count matches the bit count");
+
+    int p = 0;
+    for (int i = 0; i < FR_INJECT_TSS_BITS; i++) CHECK(bit_at(words, p++) == 0, "TSS low bit");
+    CHECK(bit_at(words, p++) == 1, "FSS high bit");
+
+    uint8_t got[FR_INJECT_FRAME_MAX];
+    for (int b = 0; b < n; b++) {
+        CHECK(bit_at(words, p++) == 1, "BSS high bit");
+        CHECK(bit_at(words, p++) == 0, "BSS low bit");
+        uint8_t v = 0;
+        for (int k = 0; k < 8; k++) v = (uint8_t)((v << 1) | bit_at(words, p++));   // MSB first
+        got[b] = v;
+    }
+    CHECK(bit_at(words, p++) == 0, "FES low bit");
+    CHECK(bit_at(words, p++) == 1, "FES high bit");
+    CHECK(p == total_bits, "parsed exactly the emitted bits");
+    CHECK(memcmp(got, frame, (size_t)n) == 0, "bit stream decodes back to the exact frame bytes");
+
+    // The on-wire header bytes must match the built header - this is the length
+    // field (got[2]) the bench saw read as half; pin it explicitly.
+    CHECK(got[0] == frame[0] && got[1] == frame[1], "slot-ID header bytes on the wire");
+    CHECK(got[2] == frame[2], "length/header-CRC byte on the wire");
+}
+
 int main(void) {
     const uint8_t payload[] = {0x11, 0x11, 0x11, 0x11, 0x11, 0x11};
     const uint8_t window[]  = {0xAA, 0xBB};
@@ -120,6 +171,8 @@ int main(void) {
         uint8_t out[FR_INJECT_FRAME_MAX];
         CHECK(fr_inject_build_frame(out, &f, window, 5, 2) == 0, "window past payload end is refused");
     }
+
+    test_serialize();
 
     printf(failures ? "\n%d check(s) FAILED\n" : "\nAll checks passed\n", failures);
     return failures ? 1 : 0;

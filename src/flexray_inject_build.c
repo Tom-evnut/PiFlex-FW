@@ -49,3 +49,32 @@ int fr_inject_build_frame(uint8_t *out, const fr_frame_t *f,
     out[hp + 2] = (uint8_t)(crc & 0xFF);
     return hp + 3;
 }
+
+// Append one bit to the MSB-first bit stream in out[1..] (out[0] reserved for
+// the count word). *nbits is the running bit index.
+static inline void put_bit(uint32_t *out, int *nbits, unsigned bit) {
+    const int word = 1 + (*nbits >> 5);
+    const int pos  = 31 - (*nbits & 31);   // first bit -> bit 31 (MSB), shift-left OUT
+    if (bit) out[word] |= (1u << pos);
+    (*nbits)++;
+}
+
+int fr_inject_serialize(uint32_t *out, const uint8_t *frame, int len) {
+    if (len < 1 || len > FR_INJECT_FRAME_MAX) return 0;
+
+    for (int i = 0; i < FR_INJECT_WORDS_MAX; i++) out[i] = 0;   // clear (we OR bits in)
+
+    int nbits = 0;
+    for (int i = 0; i < FR_INJECT_TSS_BITS; i++) put_bit(out, &nbits, 0);  // TSS: lows
+    put_bit(out, &nbits, 1);                                               // FSS: one high
+    for (int b = 0; b < len; b++) {
+        put_bit(out, &nbits, 1);                                           // BSS high
+        put_bit(out, &nbits, 0);                                           // BSS low
+        for (int k = 7; k >= 0; k--) put_bit(out, &nbits, (frame[b] >> k) & 1u);  // 8 data, MSB first
+    }
+    put_bit(out, &nbits, 0);                                               // FES low
+    put_bit(out, &nbits, 1);                                               // FES high (-> idle)
+
+    out[0] = (uint32_t)(nbits - 1);          // emitter bit-loop counter (jmp x--)
+    return 1 + ((nbits + 31) >> 5);          // count word + packed bit words
+}
