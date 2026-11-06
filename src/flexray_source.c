@@ -11,7 +11,7 @@
 #include <string.h>
 
 void fr_source_payload(uint8_t *buf, const fr_source_slot_t *slot, uint8_t cycle) {
-    memset(buf, slot->fill, slot->payload_len);
+    memcpy(buf, slot->payload, slot->payload_len);
     if ((slot->flags & FR_SRC_FLAG_CYCLE_COUNTER) && slot->payload_len > 0)
         buf[slot->payload_len - 1] = (uint8_t)(cycle & 0x3F);
 }

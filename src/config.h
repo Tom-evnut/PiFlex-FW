@@ -49,20 +49,17 @@
 
 // --- FlexRay source / generator (phase 5, -DFR_SOURCE) ---------------------
 // Source mode (see flexray_source_tx.c) is a free-running static-segment
-// emitter: it walks FR_SOURCE_SCHEDULE once per cycle, pacing one slot frame
-// every FR_SRC_FRAME_PERIOD_US and advancing the 0..63 cycle counter when the
-// schedule wraps. These are deliberately generous bench defaults (well under the
-// ~17 us a short frame occupies on the 10 Mbit/s wire) so emission never
-// saturates; trim them on the bench to set the desired frame rate. <<TUNE>>.
+// emitter: it walks the RAM schedule once per cycle, pacing one slot frame every
+// "period_us" and advancing the 0..63 cycle counter when the schedule wraps.
 //
-// FR_SRC_FRAME_PERIOD_US : spacing between successive emitted slot frames. With
-//   N slots this makes one cycle take N * FR_SRC_FRAME_PERIOD_US, and a full
-//   0..63 sweep 64 * N * FR_SRC_FRAME_PERIOD_US.
-// FR_SRC_CYCLE_GAP_US    : extra idle inserted when the schedule wraps to the
-//   next cycle (0 = none; a steady cadence). Lets the bench widen the cycle
-//   boundary without changing the per-slot spacing.
-#define FR_SRC_FRAME_PERIOD_US  500u
-#define FR_SRC_CYCLE_GAP_US     0u
+// Since phase 6 the schedule, the frame period, the inter-cycle gap, and the
+// run/stop state are RAM-resident and host-configurable at runtime (SavvyCAN ops
+// 0x94/0x95/0x96, see protocol.h / flexray_source_cfg.c). The boot defaults live
+// SDK-free in flexray_source_cfg.h (FR_SRC_DEFAULT_PERIOD_US = 500 us,
+// FR_SRC_DEFAULT_CYCLE_GAP_US = 0, generator enabled) - deliberately generous
+// bench values (well under the ~17 us a short frame occupies on the 10 Mbit/s
+// wire) so emission never saturates; the host trims them live over 0x96 instead
+// of a reflash.
 
 // FR_MAX_PAYLOAD lives in flexray_decode.h (shared with the host-testable core).
 

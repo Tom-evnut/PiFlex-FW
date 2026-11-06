@@ -38,7 +38,7 @@ static bool decode_built(const uint8_t *bytes, int n, uint8_t channel, fr_frame_
 // cycle when the counter flag is set. Independent re-implementation so the test
 // pins the contract, not just mirrors the code.
 static void expected_payload(uint8_t *buf, const fr_source_slot_t *slot, uint8_t cycle) {
-    for (int i = 0; i < slot->payload_len; i++) buf[i] = slot->fill;
+    for (int i = 0; i < slot->payload_len; i++) buf[i] = slot->payload[i];
     if ((slot->flags & FR_SRC_FLAG_CYCLE_COUNTER) && slot->payload_len > 0)
         buf[slot->payload_len - 1] = (uint8_t)(cycle & 0x3F);
 }
@@ -73,8 +73,8 @@ static void test_cycle_sweep(void) {
 
     // 65 cycles so we observe 0..63 and the wrap 63 -> 0.
     for (int step = 0; step < 65; step++) {
-        for (int s = 0; s < FR_SOURCE_SLOT_COUNT; s++) {
-            const fr_source_slot_t *slot = &FR_SOURCE_SCHEDULE[s];
+        for (int s = 0; s < FR_SRC_DEFAULT_SLOT_COUNT; s++) {
+            const fr_source_slot_t *slot = &FR_SOURCE_DEFAULT_SCHEDULE[s];
             if (slot->channels & FR_SRC_CH_FR1) source_case(slot, PIFLEX_SOURCE_FR1, cycle);
             if (slot->channels & FR_SRC_CH_FR2) source_case(slot, PIFLEX_SOURCE_FR2, cycle);
         }
@@ -92,11 +92,11 @@ static void test_cycle_sweep(void) {
 // The schedule ships the bench sample slots on both channels so the existing
 // far-side listener / SavvyCAN decode them unchanged.
 static void test_sample_schedule(void) {
-    CHECK(FR_SOURCE_SLOT_COUNT == 3, "schedule ships the three sample slots");
+    CHECK(FR_SRC_DEFAULT_SLOT_COUNT == 3, "default schedule ships the three sample slots");
     const uint16_t want[3] = { 0x001, 0x002, 0x004 };
-    for (int s = 0; s < FR_SOURCE_SLOT_COUNT && s < 3; s++) {
-        CHECK(FR_SOURCE_SCHEDULE[s].slot_id == want[s], "sample slot id (0x001/0x002/0x004)");
-        CHECK((FR_SOURCE_SCHEDULE[s].channels & (FR_SRC_CH_FR1 | FR_SRC_CH_FR2))
+    for (int s = 0; s < FR_SRC_DEFAULT_SLOT_COUNT && s < 3; s++) {
+        CHECK(FR_SOURCE_DEFAULT_SCHEDULE[s].slot_id == want[s], "sample slot id (0x001/0x002/0x004)");
+        CHECK((FR_SOURCE_DEFAULT_SCHEDULE[s].channels & (FR_SRC_CH_FR1 | FR_SRC_CH_FR2))
                   == (FR_SRC_CH_FR1 | FR_SRC_CH_FR2), "sample slot emits on both channels");
     }
 }
@@ -105,7 +105,7 @@ static void test_sample_schedule(void) {
 // when decoded strictly as FR2 (init 0xABCDEF), and vice versa - proving each
 // bus carries its own correct CRC, not a single init reused on both.
 static void test_per_channel_crc(void) {
-    const fr_source_slot_t *slot = &FR_SOURCE_SCHEDULE[0];
+    const fr_source_slot_t *slot = &FR_SOURCE_DEFAULT_SCHEDULE[0];
 
     uint8_t a[FR_INJECT_FRAME_MAX], b[FR_INJECT_FRAME_MAX];
     const int na = fr_source_build_frame(a, slot, 7, PIFLEX_SOURCE_FR1);
@@ -132,10 +132,11 @@ static void test_per_channel_crc(void) {
 static void test_bad_length(void) {
     uint8_t out[FR_INJECT_FRAME_MAX];
 
-    fr_source_slot_t bad = { 0x010, 3 /* odd */, FR_SRC_CH_FR1, 0x55, 0 };
+    // New slot layout: { slot_id, payload_len, channels, flags, payload[] }.
+    fr_source_slot_t bad = { 0x010, 3 /* odd */, FR_SRC_CH_FR1, 0, {0x55, 0x55, 0x55} };
     CHECK(fr_source_build_frame(out, &bad, 0, PIFLEX_SOURCE_FR1) == 0, "odd payload length refused");
 
-    fr_source_slot_t big = { 0x010, FR_MAX_PAYLOAD /* 254, max even */, FR_SRC_CH_FR1, 0x55, 0 };
+    fr_source_slot_t big = { 0x010, FR_MAX_PAYLOAD /* 254, max even */, FR_SRC_CH_FR1, 0, {0} };
     CHECK(fr_source_build_frame(out, &big, 0, PIFLEX_SOURCE_FR1) == 5 + FR_MAX_PAYLOAD + 3,
           "maximum even payload length builds");
 }
