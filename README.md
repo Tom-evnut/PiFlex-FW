@@ -55,19 +55,47 @@ Pico SDK): `decode_test` exercises framing + CRCs, `record_test` checks the USB
 record layout against SavvyCAN's parser offsets for every format, `injector_test`
 checks the injector control plane (E2E CRC-8, op `0x90`/`0x91` framing, rule
 matching), `inject_build_test` rebuilds an injected frame and decodes it back
-to prove the splice + recomputed 24-bit CRC validate, and `source_test` builds
+to prove the splice + recomputed 24-bit CRC validate, `source_test` builds
 the phase-5 generator's scheduled frames and decodes them back to prove the slot
 IDs, the per-channel 24-bit CRC, the 0–63 cycle counter, and the scheduled
-payload bytes.
+payload bytes, and `hostcfg_test` drives the runtime host-config ops
+(`0x92`–`0x96`) through the real framer to prove the RAM rule table + generator
+schedule parse and apply correctly, that `cycle_mask` behaves (specific cycle vs
+any) and a configured rule splices the same bytes the compile-time rule did, and
+that the `0xA3` status is exactly 16 bytes with the right counter fields.
 
 ```sh
 cd test
 gcc -I ../src decode_test.c ../src/flexray_decode.c -o decode_test && ./decode_test
 gcc -I ../src record_test.c ../src/flexray_record.c ../src/flexray_decode.c -o record_test && ./record_test
-gcc -I ../src injector_test.c ../src/flexray_injector.c -o injector_test && ./injector_test
+gcc -I ../src injector_test.c ../src/flexray_injector.c ../src/flexray_source_cfg.c -o injector_test && ./injector_test
 gcc -I ../src inject_build_test.c ../src/flexray_inject_build.c ../src/flexray_decode.c -o inject_build_test && ./inject_build_test
 gcc -I ../src source_test.c ../src/flexray_source.c ../src/flexray_inject_build.c ../src/flexray_decode.c -o source_test && ./source_test
+gcc -I ../src hostcfg_test.c ../src/flexray_injector.c ../src/flexray_source_cfg.c -o hostcfg_test && ./hostcfg_test
 ```
+
+### Runtime host configuration (ops `0x92`–`0x96`, status `0xA3`)
+
+The injection rule table (which slots/windows may be overridden) and the
+generator schedule (which slots are transmitted, their timing and run/stop) are
+**RAM-resident and reconfigurable at runtime** over the existing SavvyCAN USB
+contract — no reflash. Both tables are seeded at boot with the phase-4/5 sample
+defaults, so an un-configured device behaves exactly as before.
+
+- `0x92 SET_INJECT_RULE` / `0x93 CLEAR_INJECT_RULES` — add/replace or clear RAM
+  injection rules (slot + `cycle_base`/`cycle_mask` + replace window).
+- `0x94 SET_SOURCE_SLOT` / `0x95 CLEAR_SOURCE_SCHEDULE` — add/replace or clear
+  generator schedule slots (slot + channel mask + payload + flags).
+- `0x96 SET_SOURCE_PARAMS` — set the generator frame period, inter-cycle gap and
+  run/stop.
+- `0xA3 GET_INJECT_STATUS` (control-IN) — 16-byte status: magic/version, injector
+  enable + rule count, generator slot count + run-state, and the
+  `total_inject_matches` / `total_inject_drops` counters.
+
+The exact byte layouts are the single source of truth in
+[`src/protocol.h`](src/protocol.h); `0x92`/`0x93` only splice in an `-DFR_INJECT`
+build and `0x94`–`0x96` only emit in an `-DFR_SOURCE` build, but the control plane
+accepts and stores every op in all builds.
 
 ## Status (phase 1)
 

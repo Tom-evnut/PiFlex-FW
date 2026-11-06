@@ -36,6 +36,7 @@ add_executable(piflex_fw
     src/flexray_decode.c
     src/flexray_record.c
     src/flexray_injector.c
+    src/flexray_source_cfg.c
     src/flexray_inject_build.c
     src/flexray_inject_tx.c
     src/usb_descriptors.c

@@ -36,6 +36,7 @@
 #include "flexray_source_tx.h"
 #include "flexray_source.h"
 #include "flexray_source_schedule.h"
+#include "flexray_source_cfg.h"     // live RAM schedule + timing/run-state
 #include "flexray_inject_build.h"   // fr_inject_serialize, FR_INJECT_*_MAX
 #include "config.h"
 #include "protocol.h"
@@ -116,15 +117,25 @@ static void emit_slot(fr_src_chan_t *c, const fr_source_slot_t *slot, uint8_t cy
 }
 
 void flexray_source_tick(void) {
+    // Timing + run-state are host-configurable at runtime (op 0x96). An empty
+    // schedule (host cleared every slot) or a stopped generator emits nothing.
+    const uint32_t period_us = fr_source_cfg_period_us();
+    const int      count     = fr_source_cfg_slot_count();
+    if (!fr_source_cfg_enabled() || count <= 0) return;
+
     const uint32_t now = time_us_32();
     if ((int32_t)(now - s_next_us) < 0) return;      // next slot not due yet
-    s_next_us += FR_SRC_FRAME_PERIOD_US;
+    s_next_us += period_us;
     // If the loop fell far behind (long USB/RX service), resync the cadence to now
     // rather than bursting a backlog of frames.
-    if ((int32_t)(now - s_next_us) > (int32_t)FR_SRC_FRAME_PERIOD_US)
-        s_next_us = now + FR_SRC_FRAME_PERIOD_US;
+    if ((int32_t)(now - s_next_us) > (int32_t)period_us)
+        s_next_us = now + period_us;
 
-    const fr_source_slot_t *slot = &FR_SOURCE_SCHEDULE[s_slot_idx];
+    // The RAM schedule can shrink under us (host sent 0x94/0x95); keep the cursor
+    // in range before indexing.
+    if (s_slot_idx >= count) s_slot_idx = 0;
+    const fr_source_slot_t *slot = fr_source_cfg_slot(s_slot_idx);
+    if (!slot) return;
 
     // Emit this slot on every channel it is scheduled for. The two SMs are
     // independent, so FR1 and FR2 frames are launched back-to-back (effectively
@@ -134,9 +145,9 @@ void flexray_source_tick(void) {
             emit_slot(&s_ch[i], slot, s_cycle);
 
     // Advance the schedule; wrap to the next 0..63 cycle at the end of the table.
-    if (++s_slot_idx >= FR_SOURCE_SLOT_COUNT) {
+    if (++s_slot_idx >= count) {
         s_slot_idx = 0;
         s_cycle = (uint8_t)((s_cycle + 1) & 0x3F);
-        s_next_us += FR_SRC_CYCLE_GAP_US;            // optional cycle-boundary idle
+        s_next_us += fr_source_cfg_cycle_gap_us();   // optional cycle-boundary idle
     }
 }

@@ -10,7 +10,9 @@
 // interop contract.
 //
 // Build & run (host compiler, no Pico SDK needed):
-//   gcc -I ../src injector_test.c ../src/flexray_injector.c -o injector_test && ./injector_test
+//   gcc -I ../src injector_test.c ../src/flexray_injector.c ../src/flexray_source_cfg.c -o injector_test && ./injector_test
+// (flexray_source_cfg.c is linked because the shared EP 0x03 framer / reset now
+//  also drives the generator config; this test still only exercises 0x90/0x91.)
 #include "flexray_injector.h"
 #include "flexray_injector_rules.h"
 #include "protocol.h"
