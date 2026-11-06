@@ -17,6 +17,9 @@
 #ifdef FR_INJECT
 #include "flexray_inject_tx.h"
 #endif
+#ifdef FR_SOURCE
+#include "flexray_source_tx.h"
+#endif
 
 static uint8_t s_record_format = PIFLEX_FMT_STOCK;
 
@@ -136,7 +139,14 @@ int main(void) {
     tusb_init();
     fr_inject_reset();   // SAFETY: injector OFF until the host enables it (op 0x91)
     flexray_rx_init();
-#ifdef FR_INJECT
+#if defined(FR_SOURCE)
+    // Source build: the board is the active transmitter. Instead of the bridge,
+    // start the generator - two TX SMs on pio1 (FR1 + FR2) that emit the static
+    // schedule (flexray_source_schedule.h) with a free-running 0..63 cycle
+    // counter. RX (pio0) keeps capturing the board's own emission. See
+    // flexray_source_tx.c.
+    flexray_source_init();
+#elif defined(FR_INJECT)
     // Injector build: instead of the verbatim FR2->FR1 bit-mirror, regenerate
     // each FR2 frame on FR1 (splicing a matched override) so a payload byte can
     // be changed with a valid recomputed CRC. The inject SM is the sole driver
@@ -155,6 +165,12 @@ int main(void) {
             sleep_ms(10);          // let the control-status ACK reach the host
             reset_usb_boot(0, 0);  // reboot into the RP2 USB mass-storage bootloader
         }
+#ifdef FR_SOURCE
+        // Drive the generator whether or not a host is attached: the board is a
+        // standalone bench signal source. Captured frames (including the board's
+        // own echoed emission) still only stream to the host while mounted.
+        flexray_source_tick();
+#endif
         if (tud_vendor_mounted()) {
             poll_injector_out();                 // drain EP 0x03 injector ops
             if (flexray_rx_poll(&frame)) {
