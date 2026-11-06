@@ -13,6 +13,10 @@
 #include "flexray_rx.h"
 #include "flexray_tx.h"
 #include "flexray_record.h"
+#include "flexray_injector.h"
+#ifdef FR_INJECT
+#include "flexray_inject_tx.h"
+#endif
 
 static uint8_t s_record_format = PIFLEX_FMT_STOCK;
 
@@ -44,6 +48,32 @@ static void send_frame(const fr_frame_t *f) {
         tud_vendor_write_flush();
     }
     // else: drop. In format 3 the resulting gap in the sequence number tells the host.
+}
+
+// Drain the bulk-OUT injector pipe (EP 0x03) and dispatch each complete op to
+// the injector control plane. TinyUSB presents the OUT endpoint as a byte FIFO
+// with no message boundaries, so bytes are accumulated here and framed by the
+// injector (op byte + the 0x90 length field). An unknown leading byte resyncs
+// by dropping the buffer; a buffer that fills without a complete message (a
+// malformed/garbage stream) is also dropped, so the pipe always recovers.
+static void poll_injector_out(void) {
+    static uint8_t buf[6 + 1 + FR_MAX_PAYLOAD];   // largest 0x90: header + slice
+    static int have = 0;
+
+    while (tud_vendor_available()) {
+        if (have >= (int)sizeof buf) have = 0;    // no complete op in a full buffer -> resync
+        const uint32_t n = tud_vendor_read(buf + have, sizeof buf - (uint32_t)have);
+        if (n == 0) break;
+        have += (int)n;
+
+        for (;;) {
+            const int used = fr_inject_consume(buf, have);
+            if (used == 0) break;                 // need more bytes
+            if (used < 0) { have = 0; break; }    // unknown op -> drop and resync
+            memmove(buf, buf + used, (size_t)(have - used));
+            have -= used;
+        }
+    }
 }
 
 // Host control requests on the vendor interface.
@@ -104,10 +134,19 @@ int main(void) {
     gpio_init(FR_BGE_PIN);  gpio_set_dir(FR_BGE_PIN,  GPIO_OUT); gpio_put(FR_BGE_PIN,  1);
 
     tusb_init();
+    fr_inject_reset();   // SAFETY: injector OFF until the host enables it (op 0x91)
     flexray_rx_init();
+#ifdef FR_INJECT
+    // Injector build: instead of the verbatim FR2->FR1 bit-mirror, regenerate
+    // each FR2 frame on FR1 (splicing a matched override) so a payload byte can
+    // be changed with a valid recomputed CRC. The inject SM is the sole driver
+    // of FR1 TXD/TXEN, so there is no PIO contention. See flexray_inject_tx.c.
+    flexray_inject_tx_init();
+#else
     // Start the MITM bit-mirror bridge. RX (pio0) keeps capturing while the
     // bridge (pio1) repeats each channel onto the other and drives TXEN.
     flexray_tx_init();
+#endif
 
     fr_frame_t frame;
     for (;;) {
@@ -116,8 +155,14 @@ int main(void) {
             sleep_ms(10);          // let the control-status ACK reach the host
             reset_usb_boot(0, 0);  // reboot into the RP2 USB mass-storage bootloader
         }
-        if (tud_vendor_mounted() && flexray_rx_poll(&frame)) {
-            send_frame(&frame);
+        if (tud_vendor_mounted()) {
+            poll_injector_out();                 // drain EP 0x03 injector ops
+            if (flexray_rx_poll(&frame)) {
+                send_frame(&frame);              // stream the captured frame to the host
+#ifdef FR_INJECT
+                flexray_inject_forward(&frame);  // regenerate FR2->FR1, splicing a match
+#endif
+            }
         }
     }
 }

@@ -1,0 +1,94 @@
+; PiFlex-FW - FlexRay injected-frame transmitter (TX encoder).
+; SPDX-License-Identifier: GPL-3.0-or-later
+;
+; Clean-room FlexRay byte transmitter written from the same line coding the RX
+; decoder recovers (flexray_rx.pio) - not derived from any third-party firmware.
+; It turns a CPU-supplied byte buffer (a frame rebuilt by flexray_inject_build.c:
+; header + spliced payload + fresh 24-bit CRC) into FlexRay line coding on the
+; destination TXD, asserting that channel's TXEN (active-low) for the frame.
+;
+; This is the Stage-4 injector's emit path. The pure PIO bit-mirror (flexray_tx.pio)
+; forwards a frame verbatim and cannot change a byte in flight; to inject, the
+; CPU decodes the frame, splices the override + recomputes the CRC, and re-emits
+; it through THIS program. See flexray_inject_tx.c and the timing analysis there.
+;
+; Line coding emitted (matches flexray_rx.pio):
+;   TSS   = run of low bits (this build: FR_TX_IDLE_BITS-2 lows; the receiver only
+;           needs >= 3, the F11 car uses 9)                                <<BENCH>>
+;   FSS   = one high bit
+;   byte  = BSS ("10": one high then one low) + 8 data bits, MSB first
+;   FES   = "01" (one low then one high), then idle high + TXEN released
+;
+; FIFO protocol (ALL framing is done on the CPU by fr_inject_serialize, so this
+; program is a uniform bit shifter with no per-byte control flow in the bit
+; stream - that is what keeps every bit exactly 2 cycles and the receiver's
+; per-BSS resync aligned):
+;   word 0    = total_bits - 1   (the bit-loop counter)
+;   words 1.. = the on-wire bit stream, packed MSB-first (first bit emitted is
+;               bit 31 of word 1); loaded by autopull, so no `pull` ever sits in
+;               the bit stream to stretch a bit.
+;
+; TIMING: the SM runs at 2 cycles per FlexRay bit (clkdiv = clk_sys /
+; (FR_BITRATE_HZ*2)). The bit loop is `out pins,1` (1 cyc, drives the bit) +
+; `jmp x--` (1 cyc, holds it) = exactly 2 cyc/bit, identical for every bit - TSS,
+; FSS, BSS, data and FES alike - so there is no accumulating phase error and the
+; receiver, which relocks on each BSS falling edge and samples 1.5 bits later,
+; lands on every data-bit centre. Absolute bit-centre trim vs the sampler stays a
+; bench check (logic-analyser), like the RX/TX <<TUNE>> points.
+
+.program flexray_inject
+.side_set 1 opt                 ; side-set drives TXEN: side 0 = assert (drive), 1 = release
+
+.wrap_target
+idle:
+    pull block        side 1    ; wait for a frame; word 0 = total_bits-1. TXEN released.
+    mov x, osr        side 1    ; x = bit counter
+    out null, 32      side 1    ; flush the count from OSR so autopull loads word 1 next
+bit_lp:
+    out pins, 1       side 0    ; drive one bit (1 cyc); TXEN asserted for the frame
+    jmp x-- bit_lp              ; hold it (1 cyc) => 2 cyc/bit; next bit autopulls as needed
+    set pins, 1       side 1    ; last bit sent -> idle high, TXEN released
+.wrap
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+// Initialise the injected-frame transmitter on one destination channel.
+//   txd_pin  : destination TXD  (driven by `set`/`out`, one bit)
+//   txen_pin : destination TXEN (driven by side-set; active-low)
+// Runs at 2 PIO cycles per FlexRay bit. The caller owns arbitration against the
+// bit-mirror: this SM must be the only driver of txd_pin/txen_pin while it runs
+// (see flexray_inject_tx.c - the inject build does not start the mirror for this
+// direction, so there is no contention on these pins).
+static inline void flexray_inject_program_init(PIO pio, uint sm, uint offset,
+                                               uint txd_pin, uint txen_pin) {
+    pio_sm_config c = flexray_inject_program_get_default_config(offset);
+
+    // TXD is written by `out` (every stream bit) and by `set` (the idle high
+    // between frames). TXEN via side-set.
+    sm_config_set_set_pins(&c, txd_pin, 1);
+    sm_config_set_out_pins(&c, txd_pin, 1);
+    sm_config_set_sideset_pins(&c, txen_pin);
+    // Shift left so the first serialized bit (bit 31) goes out first; autopull at
+    // 32 refills OSR transparently (no `pull` in the bit stream to stretch a bit).
+    sm_config_set_out_shift(&c, false /* shift left */, true /* autopull */, 32);
+
+    pio_gpio_init(pio, txd_pin);
+    pio_gpio_init(pio, txen_pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, txd_pin, 1, true /* output */);
+    pio_sm_set_consecutive_pindirs(pio, sm, txen_pin, 1, true /* output */);
+
+    // 2 PIO cycles per FlexRay bit (100 ns/bit at 10 Mbit/s).
+    const uint32_t clk = clock_get_hz(clk_sys);
+    sm_config_set_clkdiv(&c, (float)clk / (float)(10000000u * 2u));
+
+    pio_sm_init(pio, sm, offset, &c);
+
+    // Idle the outputs (TXD high, TXEN released high) before the SM runs so
+    // handing the pins to PIO cannot glitch the bus low.
+    const uint32_t idle_mask = (1u << txd_pin) | (1u << txen_pin);
+    pio_sm_set_pins_with_mask(pio, sm, idle_mask, idle_mask);
+
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}
