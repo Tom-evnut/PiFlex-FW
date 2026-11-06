@@ -1,5 +1,7 @@
 build/
+build-*/
 cmake-build-*/
+*.log
 *.uf2
 *.elf
 *.bin
