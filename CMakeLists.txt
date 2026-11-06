@@ -21,6 +21,14 @@ option(FR_BRIDGE_ONE_WAY "Build the FlexRay MITM bridge one-way (FR2->FR1 only)"
 # with a recomputed CRC. cmake -DFR_INJECT=ON ...  (see src/flexray_inject_tx.c).
 option(FR_INJECT "Build the FlexRay injector (regenerate FR2->FR1, splice overrides)" OFF)
 
+# Build the phase-5 source / generator: instead of the MITM bridge, the board
+# actively transmits its own static FlexRay schedule (flexray_source_schedule.h)
+# on FR1 + FR2 with a free-running 0..63 cycle counter - a standalone bench
+# signal source. cmake -DFR_SOURCE=ON ...  (see src/flexray_source_tx.c). The
+# source TU is only compiled in this build, so the default / -DFR_BRIDGE_ONE_WAY
+# / -DFR_INJECT builds are unchanged.
+option(FR_SOURCE "Build the FlexRay source/generator (standalone static schedule)" OFF)
+
 add_executable(piflex_fw
     src/main.c
     src/flexray_rx.c
@@ -46,6 +54,16 @@ endif()
 
 if(FR_INJECT)
     target_compile_definitions(piflex_fw PRIVATE FR_INJECT=1)
+endif()
+
+if(FR_SOURCE)
+    # Generator = schedule builder (SDK-free, shared with the host test) + the
+    # hardware TX/scheduler glue. Compiled only here so other builds are unchanged.
+    target_sources(piflex_fw PRIVATE
+        src/flexray_source.c
+        src/flexray_source_tx.c
+    )
+    target_compile_definitions(piflex_fw PRIVATE FR_SOURCE=1)
 endif()
 
 target_link_libraries(piflex_fw
