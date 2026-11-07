@@ -241,7 +241,8 @@ int fr_inject_build_status(uint8_t *out) {
     out[4]  = (uint8_t)s_rule_count;
     out[5]  = (uint8_t)fr_source_cfg_slot_count();
     out[6]  = fr_source_cfg_running() ? 1u : 0u;
-    out[7]  = 0u;
+    const uint32_t sd = fr_source_cfg_slot_drops();   // 0 in a non-source build too
+    out[7]  = (uint8_t)(sd > 255u ? 255u : sd);        // source_slot_drops, saturating
     out[8]  = (uint8_t)(m & 0xFF);
     out[9]  = (uint8_t)((m >> 8) & 0xFF);
     out[10] = (uint8_t)((m >> 16) & 0xFF);

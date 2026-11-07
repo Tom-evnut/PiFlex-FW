@@ -234,6 +234,7 @@ static void test_fragmented_source_slot(void) {
 
 static void test_status_layout(void) {
     CHECK(sizeof(piflex_inject_status_t) == PIFLEX_STATUS_LEN, "status struct is exactly 16 bytes");
+    CHECK(offsetof(piflex_inject_status_t, source_slot_drops) == 7, "source_slot_drops at byte 7");
     CHECK(offsetof(piflex_inject_status_t, total_inject_matches) == 8, "matches counter at byte 8");
     CHECK(offsetof(piflex_inject_status_t, total_inject_drops) == 12, "drops counter at byte 12");
 
@@ -252,6 +253,12 @@ static void test_status_layout(void) {
     n = build_override(msg, 0x7AB, 0, pay, 2);
     fr_inject_consume(msg, n);
 
+    // A bad (odd-length) source slot -> source_slot_drops = 1 (surfaced in byte 7).
+    const uint8_t odd[] = { 0x01, 0x02, 0x03 };
+    n = build_src_slot(msg, 0x0CD, FR_SRC_CH_FR1, 0, odd, 3);
+    CHECK(fr_inject_consume(msg, n) == n, "an odd-length 0x94 is still consumed (framed)");
+    CHECK(fr_source_cfg_slot_drops() == 1, "odd-length slot bumps the source drop counter");
+
     uint8_t st[PIFLEX_STATUS_LEN];
     const int sn = fr_inject_build_status(st);
     CHECK(sn == PIFLEX_STATUS_LEN, "status reply is 16 bytes");
@@ -261,7 +268,8 @@ static void test_status_layout(void) {
     CHECK(st[4] == (uint8_t)fr_inject_rule_count(), "inject_rule_count reported");
     CHECK(st[5] == (uint8_t)fr_source_cfg_slot_count(), "source_slot_count reported");
     CHECK(st[6] == 0, "source_running = 0 in a non-FR_SOURCE host build");
-    CHECK(st[7] == 0, "reserved byte is zero");
+    CHECK(st[7] == (uint8_t)fr_source_cfg_slot_drops() && st[7] == 1,
+          "byte 7 carries source_slot_drops");
 
     const uint32_t m = (uint32_t)st[8] | ((uint32_t)st[9] << 8) |
                        ((uint32_t)st[10] << 16) | ((uint32_t)st[11] << 24);

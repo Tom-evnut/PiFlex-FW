@@ -52,6 +52,12 @@ uint32_t                 fr_source_cfg_cycle_gap_us(void);
 // The stored enable flag (op 0x96), independent of the build.
 bool                     fr_source_cfg_enabled(void);
 
+// Count of op-0x94 SET_SOURCE_SLOT ops rejected (empty / odd / over-long payload,
+// or a full table) since boot or the last schedule clear (0x95). Reported as
+// source_slot_drops in the 0xA3 status so the host can see why an "Apply schedule"
+// had no effect instead of a silent drop.
+uint32_t                 fr_source_cfg_slot_drops(void);
+
 // Whether the generator is ACTUALLY emitting: true only in an -DFR_SOURCE build
 // with the enable flag set. Reported as source_running in the 0xA3 status, so a
 // non-source build truthfully reports 0 even after a 0x96 enable.

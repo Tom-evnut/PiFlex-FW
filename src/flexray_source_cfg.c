@@ -63,6 +63,7 @@ void fr_source_cfg_apply_slot(const uint8_t *msg, int len) {
 void fr_source_cfg_clear_schedule(void) {
     memset(s_sched, 0, sizeof s_sched);
     s_slot_count = 0;
+    s_slot_drops = 0;   // drop count is "since boot or the last schedule clear"
 }
 
 void fr_source_cfg_apply_params(const uint8_t *msg, int len) {
@@ -78,6 +79,7 @@ int                     fr_source_cfg_slot_count(void)  { return s_slot_count; }
 uint32_t                fr_source_cfg_period_us(void)    { return s_period_us; }
 uint32_t                fr_source_cfg_cycle_gap_us(void) { return s_gap_us; }
 bool                    fr_source_cfg_enabled(void)      { return s_enable; }
+uint32_t                fr_source_cfg_slot_drops(void)   { return s_slot_drops; }
 
 const fr_source_slot_t *fr_source_cfg_slot(int i) {
     if (i < 0 || i >= s_slot_count) return NULL;

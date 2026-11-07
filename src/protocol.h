@@ -78,9 +78,12 @@
 //   [0]  'P' (0x50)                 [1]  'F' (0x46)
 //   [2]  version = 1                [3]  injector_enabled (0/1)
 //   [4]  inject_rule_count          [5]  source_slot_count
-//   [6]  source_running (0/1)       [7]  reserved = 0
+//   [6]  source_running (0/1)       [7]  source_slot_drops (u8, saturating 255)
 //   [8..11]  u32 total_inject_matches   frames spliced since boot / last clear
 //   [12..15] u32 total_inject_drops     op-0x90 slices that matched no rule
+// source_slot_drops = op-0x94 SET_SOURCE_SLOT ops rejected (empty / odd /
+// over-long payload, or a full table) since boot or the last schedule clear
+// (0x95), so the host can see a rejected "apply schedule" instead of a silent drop.
 #define PIFLEX_STATUS_LEN      16
 #define PIFLEX_STATUS_MAGIC0   0x50  // 'P'
 #define PIFLEX_STATUS_MAGIC1   0x46  // 'F'
@@ -97,7 +100,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  inject_rule_count;     // RAM injection rules in force
     uint8_t  source_slot_count;     // RAM generator schedule slots
     uint8_t  source_running;        // 0/1 (generator actually emitting)
-    uint8_t  reserved;              // 0
+    uint8_t  source_slot_drops;     // op-0x94 slots rejected (saturating 255)
     uint32_t total_inject_matches;  // LE
     uint32_t total_inject_drops;    // LE
 } piflex_inject_status_t;
