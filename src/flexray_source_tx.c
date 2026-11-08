@@ -98,6 +98,22 @@ void flexray_source_init(void) {
     s_next_us  = time_us_32();
 }
 
+void flexray_source_deinit(void) {
+    // Stop and free both channels' DMA + SM, then the shared pio1 program. The
+    // mode manager has already released both TXEN lines, so neither channel drives
+    // the bus before teardown.
+    for (int i = 0; i < 2; i++) {
+        if (s_ch[i].dma >= 0) {
+            dma_channel_abort((uint)s_ch[i].dma);
+            dma_channel_unclaim((uint)s_ch[i].dma);
+            s_ch[i].dma = -1;
+        }
+        pio_sm_set_enabled(s_pio, s_ch[i].sm, false);
+        pio_sm_unclaim(s_pio, s_ch[i].sm);
+    }
+    pio_remove_program(s_pio, &flexray_inject_program, s_prog_off);
+}
+
 // Build and clock out one slot's frame on one channel. Dropped (returns without
 // emitting) if that channel's previous frame is still transmitting, so a slow
 // bus never wedges the loop - a free-running source can skip an occasional frame.

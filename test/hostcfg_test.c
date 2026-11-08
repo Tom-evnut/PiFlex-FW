@@ -267,7 +267,7 @@ static void test_status_layout(void) {
     CHECK(st[3] == 1, "injector_enabled reported");
     CHECK(st[4] == (uint8_t)fr_inject_rule_count(), "inject_rule_count reported");
     CHECK(st[5] == (uint8_t)fr_source_cfg_slot_count(), "source_slot_count reported");
-    CHECK(st[6] == 0, "source_running = 0 in a non-FR_SOURCE host build");
+    CHECK(st[6] == 0, "source_running = 0 when SOURCE mode is not active");
     CHECK(st[7] == (uint8_t)fr_source_cfg_slot_drops() && st[7] == 1,
           "byte 7 carries source_slot_drops");
 

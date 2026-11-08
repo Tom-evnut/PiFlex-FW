@@ -16,18 +16,16 @@ pico_sdk_init()
 # verification: cmake -DFR_BRIDGE_ONE_WAY=ON ...
 option(FR_BRIDGE_ONE_WAY "Build the FlexRay MITM bridge one-way (FR2->FR1 only)" OFF)
 
-# Build the phase-4 injector: regenerate FR2->FR1 frames (splicing a host
-# override) instead of the verbatim bit-mirror, so a payload byte can be changed
-# with a recomputed CRC. cmake -DFR_INJECT=ON ...  (see src/flexray_inject_tx.c).
-option(FR_INJECT "Build the FlexRay injector (regenerate FR2->FR1, splice overrides)" OFF)
-
-# Build the phase-5 source / generator: instead of the MITM bridge, the board
-# actively transmits its own static FlexRay schedule (flexray_source_schedule.h)
-# on FR1 + FR2 with a free-running 0..63 cycle counter - a standalone bench
-# signal source. cmake -DFR_SOURCE=ON ...  (see src/flexray_source_tx.c). The
-# source TU is only compiled in this build, so the default / -DFR_BRIDGE_ONE_WAY
-# / -DFR_INJECT builds are unchanged.
-option(FR_SOURCE "Build the FlexRay source/generator (standalone static schedule)" OFF)
+# Phase 7: one firmware compiles EVERY TX path in (bridge / inject / source) and
+# selects sniff / bridge / inject / source at RUNTIME over control request 0xA4
+# (see src/flexray_mode.c / src/protocol.h) - the data path is no longer chosen at
+# build time. Boot into a non-default mode with -DFR_DEFAULT_MODE=<0..3>.
+#
+# FR_INJECT / FR_SOURCE are retained as no-op build options (superseded by runtime
+# modes) so existing invocations still configure cleanly; they no longer gate what
+# is compiled. FR_BRIDGE_ONE_WAY still selects the one-way bridge variant.
+option(FR_INJECT "Deprecated: injector is always built; mode selected at runtime (0xA4)" OFF)
+option(FR_SOURCE "Deprecated: generator is always built; mode selected at runtime (0xA4)" OFF)
 
 add_executable(piflex_fw
     src/main.c
@@ -39,10 +37,15 @@ add_executable(piflex_fw
     src/flexray_source_cfg.c
     src/flexray_inject_build.c
     src/flexray_inject_tx.c
+    src/flexray_source.c
+    src/flexray_source_tx.c
+    src/flexray_mode.c
+    src/flexray_mode_hw.c
     src/usb_descriptors.c
 )
 
-# Assemble the FlexRay RX, TX-mirror and TX-inject PIO programs into headers.
+# Assemble the FlexRay RX, TX-mirror and TX-inject PIO programs into headers. The
+# inject PIO is shared by the inject and source modes (one loaded on pio1 at a time).
 pico_generate_pio_header(piflex_fw ${CMAKE_CURRENT_LIST_DIR}/src/flexray_rx.pio)
 pico_generate_pio_header(piflex_fw ${CMAKE_CURRENT_LIST_DIR}/src/flexray_tx.pio)
 pico_generate_pio_header(piflex_fw ${CMAKE_CURRENT_LIST_DIR}/src/flexray_inject.pio)
@@ -51,20 +54,6 @@ target_include_directories(piflex_fw PRIVATE ${CMAKE_CURRENT_LIST_DIR}/src)
 
 if(FR_BRIDGE_ONE_WAY)
     target_compile_definitions(piflex_fw PRIVATE FR_BRIDGE_ONE_WAY=1)
-endif()
-
-if(FR_INJECT)
-    target_compile_definitions(piflex_fw PRIVATE FR_INJECT=1)
-endif()
-
-if(FR_SOURCE)
-    # Generator = schedule builder (SDK-free, shared with the host test) + the
-    # hardware TX/scheduler glue. Compiled only here so other builds are unchanged.
-    target_sources(piflex_fw PRIVATE
-        src/flexray_source.c
-        src/flexray_source_tx.c
-    )
-    target_compile_definitions(piflex_fw PRIVATE FR_SOURCE=1)
 endif()
 
 target_link_libraries(piflex_fw

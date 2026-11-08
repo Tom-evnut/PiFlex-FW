@@ -14,4 +14,9 @@
 // forward-path bench verification.
 void flexray_tx_init(void);
 
+// Tear the bridge down for a runtime mode switch: stop + unclaim the forwarder
+// SMs and free the pio1 program (TXEN is released by the mode manager first).
+// After this the pio1 instruction memory and SMs are free for the next mode.
+void flexray_tx_deinit(void);
+
 #endif // PIFLEX_FLEXRAY_TX_H
