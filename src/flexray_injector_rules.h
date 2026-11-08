@@ -1,44 +1,48 @@
-// PiFlex-FW - FlexRay injector rule table (phase 4).
+// PiFlex-FW - FlexRay injector rule table defaults (phase 4, RAM-backed phase 6).
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The static, compiled-in list of slots the MITM bridge is allowed to override,
-// and - for each - which bytes of the payload may be replaced. SavvyCAN submits
-// replacement bytes over the bulk-OUT injector protocol (op 0x90, see
-// protocol.h); the firmware looks the slot up here, verifies the submitted
+// The injection allow-list: the slots the MITM bridge is allowed to override, and
+// - for each - which payload bytes may be replaced. SavvyCAN submits replacement
+// bytes over the bulk-OUT injector protocol (op 0x90, see protocol.h); the
+// firmware looks the slot up in the live rule table, verifies the submitted
 // slice, and - when the bridge later forwards a frame whose slot ID and cycle
 // match - splices the stored bytes into the payload and recomputes the 24-bit
 // frame CRC before it reaches the bus (see flexray_injector.c / the TX path).
 //
-// A slot not listed here can never be overridden: op 0x90 for an unlisted slot
-// is silently dropped. This is the safety allow-list - injection is confined to
-// the windows named below, and is additionally gated by the global injector
-// enable (op 0x91), which defaults OFF at power-up.
+// Since phase 6 the rule table is RAM-resident and host-configurable at runtime
+// (op 0x92 SET_INJECT_RULE / 0x93 CLEAR_INJECT_RULES), so changing injection
+// targets no longer needs a reflash. The table below is the BOOT DEFAULT, copied
+// into RAM by fr_inject_reset(); until the host reconfigures, behaviour is exactly
+// the phase-4 sample behaviour. A slot with no rule can never be overridden: op
+// 0x90 for an unlisted slot is dropped and counted (total_inject_drops). Injection
+// is additionally gated by the global enable (op 0x91), which defaults OFF.
 //
 // RULE FIELDS
 //   slot_id        11-bit FlexRay frame/slot ID to match (0..0x7FF).
-//   cycle_match    which FlexRay cycle(s) this rule accepts an override for:
-//                  a value 0..63 restricts the rule to that one cycle; the
-//                  sentinel FR_INJ_CYCLE_ANY (0xFF) accepts any cycle. The
-//                  override op (0x90) still carries the specific cycle the host
-//                  wants overridden (cycle_base), and the bridge only injects on
-//                  a forwarded frame whose cycle equals that stored cycle_base -
-//                  so to override several cycles the host submits one 0x90 per
-//                  cycle. cycle_match just bounds which cycles a rule will take.
+//   cycle_base,    the cycle test. A frame is eligible when
+//   cycle_mask       (frame.cycle & cycle_mask) == (cycle_base & cycle_mask).
+//                  cycle_mask == 0 accepts ANY cycle (the phase-4 cycle_match=ANY
+//                  default); a full mask (0x3F) with a cycle_base pins one cycle;
+//                  a partial mask selects a subset (e.g. mask 0x01, base 0 = even
+//                  cycles). The override op (0x90) still carries the specific
+//                  cycle it fires on (cycle_base), and a forwarded frame is
+//                  spliced only when its cycle equals that armed override cycle -
+//                  so this generalises WHICH cycles a rule accepts, while the
+//                  per-splice cycle targeting is unchanged from phase 4.
 //   replace_offset first payload byte (0-based) the override overwrites.
-//   replace_len    number of payload bytes overwritten. The replace window is
-//                  payload[replace_offset .. replace_offset+replace_len). The
-//                  host must submit a payload of at least replace_offset+
-//                  replace_len bytes (SavvyCAN sends the whole slot payload);
-//                  only this window is actually spliced onto the bus. A frame
-//                  whose payload is shorter than the window at forward time is
-//                  left verbatim (the window would not fit).
+//   replace_len    number of payload bytes overwritten (<= FR_INJ_MAX_REPLACE).
+//                  The replace window is payload[replace_offset ..
+//                  replace_offset+replace_len). The host submits a payload of at
+//                  least replace_offset+replace_len bytes; only this window is
+//                  spliced onto the bus. A frame whose payload is shorter than the
+//                  window at forward time is left verbatim.
 #ifndef PIFLEX_FLEXRAY_INJECTOR_RULES_H
 #define PIFLEX_FLEXRAY_INJECTOR_RULES_H
 
 #include <stdint.h>
 
-// cycle_match sentinel: a rule that accepts an override for any FlexRay cycle.
-#define FR_INJ_CYCLE_ANY   0xFFu
+// cycle_mask value meaning "any cycle" (accept an override for every cycle).
+#define FR_INJ_CYCLE_ANY_MASK  0x00u
 
 // Largest replace window (bytes) the firmware stores per rule. Bounds the RAM
 // held for pending overrides and the length of an accepted 0x90 window; a rule
@@ -47,32 +51,39 @@
 // small (FR_INJ_MAX_RULES * this).
 #define FR_INJ_MAX_REPLACE 64u
 
+// Fixed capacity of the RAM rule table. A SET_INJECT_RULE (0x92) that would
+// exceed this is dropped (and counted internally) rather than crashing. 16 is
+// ample for a bench / single-vehicle target set while bounding the RAM store
+// (FR_INJ_MAX_RULES * (rule + pending override), a few KB).
+#define FR_INJ_MAX_RULES   16
+
 typedef struct {
     uint16_t slot_id;        // 11-bit slot/frame ID
-    uint8_t  cycle_match;    // 0..63 exact, or FR_INJ_CYCLE_ANY
+    uint8_t  cycle_base;     // cycle match value (see cycle_mask)
+    uint8_t  cycle_mask;     // 0 = any cycle; else (cycle & mask) == (base & mask)
     uint8_t  replace_offset; // first overwritten payload byte
     uint8_t  replace_len;    // number of overwritten payload bytes (<= FR_INJ_MAX_REPLACE)
 } fr_inject_rule_t;
 
-// --- The rule table --------------------------------------------------------
+// --- Boot default rules ----------------------------------------------------
 //
 // SAMPLE / BENCH RULES (clearly marked): the three slots the bench signal
 // generator emits on FR2 - 0x001 (payload 11 11 ..), 0x002 (22 22 ..), 0x004
-// (44 44 ..), across cycles 0..63 - so the injection bench can exercise the
-// full path end to end. Each overrides the first two payload bytes on any
-// cycle; the bench operator sends a SavvyCAN FlexRay frame for the slot with a
-// >=2-byte payload and watches the generator's far-side FR1 listener see the
-// first two bytes change (e.g. 11 11 -> AA BB) while the rest stays 11.
+// (44 44 ..) - so the injection bench can exercise the full path end to end. Each
+// accepts an override for ANY cycle (cycle_mask 0) and overrides the first two
+// payload bytes; the bench operator sends a SavvyCAN FlexRay frame for the slot
+// (>=2-byte payload) and watches the first two bytes change on the targeted cycle.
 //
-// Replace with the real target slots/windows for a given vehicle before field
-// use; this table is the only place injection targets are defined.
-static const fr_inject_rule_t FR_INJECT_RULES[] = {
-    // slot_id, cycle_match,        replace_offset, replace_len
-    { 0x001,   FR_INJ_CYCLE_ANY,    0,              2 },   // SAMPLE (bench gen slot 0x001)
-    { 0x002,   FR_INJ_CYCLE_ANY,    0,              2 },   // SAMPLE (bench gen slot 0x002)
-    { 0x004,   FR_INJ_CYCLE_ANY,    0,              2 },   // SAMPLE (bench gen slot 0x004)
+// These are only the power-up defaults now; the host replaces them at runtime with
+// op 0x92 for a real vehicle's target slots/windows.
+static const fr_inject_rule_t FR_INJECT_DEFAULT_RULES[] = {
+    // slot_id, cycle_base, cycle_mask,          replace_offset, replace_len
+    { 0x001,   0,          FR_INJ_CYCLE_ANY_MASK, 0,             2 },   // SAMPLE (bench gen slot 0x001)
+    { 0x002,   0,          FR_INJ_CYCLE_ANY_MASK, 0,             2 },   // SAMPLE (bench gen slot 0x002)
+    { 0x004,   0,          FR_INJ_CYCLE_ANY_MASK, 0,             2 },   // SAMPLE (bench gen slot 0x004)
 };
 
-#define FR_INJ_RULE_COUNT ((int)(sizeof(FR_INJECT_RULES) / sizeof(FR_INJECT_RULES[0])))
+#define FR_INJ_DEFAULT_RULE_COUNT \
+    ((int)(sizeof(FR_INJECT_DEFAULT_RULES) / sizeof(FR_INJECT_DEFAULT_RULES[0])))
 
 #endif // PIFLEX_FLEXRAY_INJECTOR_RULES_H

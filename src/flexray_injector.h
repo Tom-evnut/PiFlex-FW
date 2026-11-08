@@ -28,13 +28,47 @@
 #define FR_INJ_E2E_INIT  0xF1u
 uint8_t fr_e2e_crc8(const uint8_t *data, int len, uint8_t init);
 
-// Reset all injector state: disable injection and drop every pending override.
+// Reset all injector state: disable injection, re-seed the RAM rule table with
+// the boot defaults (flexray_injector_rules.h), drop every pending override, and
+// zero the match/drop counters. Also re-seeds the source config (so a single
+// call restores the whole host-config control plane to power-up).
 void fr_inject_reset(void);
 
 // Global injector enable (op 0x91). Disabling leaves pending overrides stored
 // but stops the TX path injecting (fr_inject_match returns no match while off).
 void fr_inject_set_enabled(bool enabled);
 bool fr_inject_enabled(void);
+
+// --- Host-configurable rule table (op 0x92 / 0x93) -------------------------
+
+// Add or replace a RAM injection rule, keyed by (slot_id, cycle_base, cycle_mask).
+// replace_len must be <= FR_INJ_MAX_REPLACE and the table must have room for a new
+// key; otherwise the add is rejected (returns false and is counted internally).
+// Replacing an existing key updates its window and drops that rule's pending
+// override. Returns true if the rule is now in force.
+bool fr_inject_add_rule(uint16_t slot_id, uint8_t cycle_base, uint8_t cycle_mask,
+                        uint8_t replace_offset, uint8_t replace_len);
+
+// Remove every RAM injection rule (and their pending overrides). After this no
+// slot can be overridden until the host adds rules again.
+void fr_inject_clear_rules(void);
+
+// Number of injection rules currently in force (0..FR_INJ_MAX_RULES).
+int fr_inject_rule_count(void);
+
+// --- Status counters (reported in the 0xA3 status) -------------------------
+
+// Frames selected for splice since boot / last fr_inject_reset (each true return
+// of fr_inject_match). total_inject_drops counts op-0x90 override slices that
+// matched no rule (an eligible-but-unlisted slot/cycle), so the host can finally
+// see a non-matching override instead of a silent drop.
+uint32_t fr_inject_match_count(void);
+uint32_t fr_inject_drop_count(void);
+
+// Build the 16-byte GET_INJECT_STATUS (0xA3) reply into out (>= PIFLEX_STATUS_LEN
+// bytes), little-endian, per protocol.h. Pulls the source-side fields from the
+// source config module. Returns PIFLEX_STATUS_LEN.
+int fr_inject_build_status(uint8_t *out);
 
 // Try to parse and handle ONE injector message at the front of buf (len bytes
 // available). Returns:

@@ -53,12 +53,13 @@ static void send_frame(const fr_frame_t *f) {
     // else: drop. In format 3 the resulting gap in the sequence number tells the host.
 }
 
-// Drain the bulk-OUT injector pipe (EP 0x03) and dispatch each complete op to
-// the injector control plane. TinyUSB presents the OUT endpoint as a byte FIFO
-// with no message boundaries, so bytes are accumulated here and framed by the
-// injector (op byte + the 0x90 length field). An unknown leading byte resyncs
-// by dropping the buffer; a buffer that fills without a complete message (a
-// malformed/garbage stream) is also dropped, so the pipe always recovers.
+// Drain the bulk-OUT host-config pipe (EP 0x03) and dispatch each complete op to
+// the control plane. TinyUSB presents the OUT endpoint as a byte FIFO with no
+// message boundaries, so bytes are accumulated here and framed by fr_inject_consume
+// (op byte + each op's deterministic length: 0x90-0x96, see protocol.h). An unknown
+// leading byte resyncs by dropping the buffer; a buffer that fills without a
+// complete message (a malformed/garbage stream) is also dropped, so the pipe always
+// recovers. Sized for the largest op (0x90: 6-byte header + CRC + max payload).
 static void poll_injector_out(void) {
     static uint8_t buf[6 + 1 + FR_MAX_PAYLOAD];   // largest 0x90: header + slice
     static int have = 0;
@@ -98,6 +99,16 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage,
             // checks that the reply is non-empty; its contents are unused.
             static const uint8_t info[4] = {'P', 'F', PIFLEX_FMT_TSSEQ, 0};
             return tud_control_xfer(rhport, req, (void *)info, sizeof(info));
+        }
+
+        case PIFLEX_GET_INJECT_STATUS: {
+            // 16-byte host-config status: magic/version, injector enable + rule
+            // count, generator slot count + run-state, and the match/drop counters
+            // (see protocol.h). Lets the host confirm its pushed config took effect
+            // and watch injection actually fire (and non-matching overrides drop).
+            static uint8_t status[PIFLEX_STATUS_LEN];
+            fr_inject_build_status(status);
+            return tud_control_xfer(rhport, req, status, sizeof(status));
         }
 
         case PIFLEX_RESET_COMMS:

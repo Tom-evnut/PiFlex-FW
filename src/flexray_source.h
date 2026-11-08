@@ -18,8 +18,8 @@
 #include "flexray_source_schedule.h"   // fr_source_slot_t
 
 // Generate the payload for slot at cycle into buf (slot->payload_len bytes):
-// every byte = slot->fill, then - if FR_SRC_FLAG_CYCLE_COUNTER - the last byte
-// is overwritten with the cycle (0..63). buf must hold slot->payload_len bytes.
+// copy slot->payload, then - if FR_SRC_FLAG_CYCLE_COUNTER - overwrite the last
+// byte with the cycle (0..63). buf must hold slot->payload_len bytes.
 void fr_source_payload(uint8_t *buf, const fr_source_slot_t *slot, uint8_t cycle);
 
 // Build the on-wire bytes for slot on channel (PIFLEX_SOURCE_FR1 / FR2) at cycle:
