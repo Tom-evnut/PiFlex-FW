@@ -63,4 +63,15 @@
 
 // FR_MAX_PAYLOAD lives in flexray_decode.h (shared with the host-testable core).
 
+// --- Runtime data-path mode (phase 7) --------------------------------------
+// One firmware compiles every TX path in and selects SNIFF / BRIDGE / INJECT /
+// SOURCE at runtime over control requests 0xA4/0xA5 (see protocol.h /
+// flexray_mode.c). FR_DEFAULT_MODE is only the power-up mode before the host
+// selects one; it defaults to SNIFF (0) so the board drives nothing until told
+// to. Override at build time with e.g. -DFR_DEFAULT_MODE=1 to boot into BRIDGE.
+// Values: 0 = SNIFF, 1 = BRIDGE, 2 = INJECT, 3 = SOURCE (enum piflex_mode).
+#ifndef FR_DEFAULT_MODE
+#define FR_DEFAULT_MODE  0  /* PIFLEX_MODE_SNIFF */
+#endif
+
 #endif // PIFLEX_CONFIG_H

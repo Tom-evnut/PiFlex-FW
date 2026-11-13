@@ -8,10 +8,10 @@
 // EP 0x03 framer); it calls the fr_source_cfg_apply_* parsers here once it has a
 // complete op. Deliberately free of any hardware/SDK include so the whole control
 // plane is unit-testable on a host (see test/hostcfg_test.c); the generator TX
-// path (flexray_source_tx.c, -DFR_SOURCE only) reads the live table + params.
+// path (flexray_source_tx.c) reads the live table + params while SOURCE mode runs.
 //
-// These ops are accepted and stored in EVERY build for a uniform host contract,
-// but only have a bus effect in an -DFR_SOURCE build (where the generator runs).
+// These ops are accepted and stored in every mode for a uniform host contract, but
+// only have a bus effect while SOURCE mode is the active data path (0xA4).
 #ifndef PIFLEX_FLEXRAY_SOURCE_CFG_H
 #define PIFLEX_FLEXRAY_SOURCE_CFG_H
 
@@ -58,9 +58,14 @@ bool                     fr_source_cfg_enabled(void);
 // had no effect instead of a silent drop.
 uint32_t                 fr_source_cfg_slot_drops(void);
 
-// Whether the generator is ACTUALLY emitting: true only in an -DFR_SOURCE build
-// with the enable flag set. Reported as source_running in the 0xA3 status, so a
-// non-source build truthfully reports 0 even after a 0x96 enable.
+// Mark the generator data path active/inactive. The mode manager sets this true
+// when SOURCE mode is entered and false when it is left, so fr_source_cfg_running()
+// (and the 0xA3 source_running bit) is truthful without a compile-time flag.
+void                     fr_source_cfg_set_active(bool active);
+
+// Whether the generator is ACTUALLY emitting: SOURCE mode active AND enabled (0x96)
+// AND at least one schedule slot. Reported as source_running in the 0xA3 status;
+// in any other mode (or before a mode is entered) this is 0.
 bool                     fr_source_cfg_running(void);
 
 #endif // PIFLEX_FLEXRAY_SOURCE_CFG_H

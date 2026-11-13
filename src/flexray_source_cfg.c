@@ -17,6 +17,7 @@ static uint32_t s_gap_us    = FR_SRC_DEFAULT_CYCLE_GAP_US;
 static bool     s_enable    = FR_SRC_DEFAULT_ENABLE;
 
 static uint32_t s_slot_drops = 0;   // 0x94 adds rejected (full / bad payload_len)
+static bool     s_active     = false;  // true only while SOURCE mode drives the bus
 
 void fr_source_cfg_reset(void) {
     memset(s_sched, 0, sizeof s_sched);
@@ -28,7 +29,10 @@ void fr_source_cfg_reset(void) {
     s_gap_us     = FR_SRC_DEFAULT_CYCLE_GAP_US;
     s_enable     = FR_SRC_DEFAULT_ENABLE;
     s_slot_drops = 0;
+    s_active     = false;
 }
+
+void fr_source_cfg_set_active(bool active) { s_active = active; }
 
 static int find_slot(uint16_t slot_id) {
     for (int i = 0; i < s_slot_count; i++)
@@ -87,9 +91,8 @@ const fr_source_slot_t *fr_source_cfg_slot(int i) {
 }
 
 bool fr_source_cfg_running(void) {
-#ifdef FR_SOURCE
-    return s_enable && s_slot_count > 0;
-#else
-    return false;   // the generator data path is absent in this build
-#endif
+    // Truthful "generator actually emitting": SOURCE mode is the active data path
+    // (set by the mode manager), the host has it enabled, and there is a slot to
+    // emit. In any other mode s_active is false, so this reports 0.
+    return s_active && s_enable && s_slot_count > 0;
 }

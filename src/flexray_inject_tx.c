@@ -88,6 +88,19 @@ void flexray_inject_tx_init(void) {
                           0, false);           // count set per frame; don't start yet
 }
 
+void flexray_inject_tx_deinit(void) {
+    // Stop and free the DMA, then the SM and the pio1 program. The mode manager
+    // has already released both TXEN lines, so FR1 is back in RX before teardown.
+    if (s_dma >= 0) {
+        dma_channel_abort((uint)s_dma);      // drop any frame still streaming
+        dma_channel_unclaim((uint)s_dma);
+        s_dma = -1;
+    }
+    pio_sm_set_enabled(s_pio, s_sm, false);
+    pio_sm_unclaim(s_pio, s_sm);
+    pio_remove_program(s_pio, &flexray_inject_program, s_offset);
+}
+
 // Serialise a rebuilt frame to the FlexRay line coding and stream it to the
 // transmitter via DMA. Drops the frame if the previous one is still
 // transmitting (the DMA channel is busy), so a slow bus never wedges the capture

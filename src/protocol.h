@@ -28,8 +28,23 @@
 #define PIFLEX_SET_CAN_RECORDS   0xA1  // enable interleaved CAN records (2+2 board)
 #define PIFLEX_GET_TS_INFO       0xA2  // reply identifies timestamped-capture firmware
 #define PIFLEX_GET_INJECT_STATUS 0xA3  // IN: 16-byte host-config status (see below)
+#define PIFLEX_SET_MODE          0xA4  // OUT: wValue = mode 0..3 (see piflex_mode)
+#define PIFLEX_GET_MODE          0xA5  // IN: 1 byte = active mode
 #define PIFLEX_RESET_COMMS       0xC0  // flush / resync the stream
 #define PIFLEX_ENTER_BOOTLOADER  0xD1  // reboot into the RP2 USB bootloader for reflash
+
+// Runtime data-path mode (phase 7). One firmware compiles every TX path in and
+// switches between them at runtime over control requests 0xA4/0xA5 - no reflash
+// and no mutually-exclusive compile-time builds. Only one TX mode drives the bus
+// at a time; RX capture runs in every mode. The numbering is the frozen contract
+// shared with SavvyCAN; a SET_MODE (0xA4) with an out-of-range wValue is ignored.
+enum piflex_mode {
+    PIFLEX_MODE_SNIFF  = 0,  // RX only: both TXEN released, nothing drives the bus
+    PIFLEX_MODE_BRIDGE = 1,  // bidirectional MITM bit-mirror (flexray_tx)
+    PIFLEX_MODE_INJECT = 2,  // regenerate FR2->FR1 + splice on rule (flexray_inject_tx)
+    PIFLEX_MODE_SOURCE = 3,  // standalone generator (flexray_source_*)
+};
+#define PIFLEX_MODE_MAX  PIFLEX_MODE_SOURCE  // highest valid mode value
 
 // Bulk-OUT injector ops (first byte of the OUT payload). All multi-byte fields
 // are little-endian. Each op has a deterministic length so the fr_inject_consume
@@ -63,11 +78,11 @@
 //        [0x96][period_us u32][cycle_gap_us u32][enable]
 //        Set generator frame period, inter-cycle gap, and run/stop.
 //
-// 0x92/0x93 affect injection, which only splices in an -DFR_INJECT build;
-// 0x94/0x95/0x96 affect the generator, which only runs in an -DFR_SOURCE build.
-// The control plane (framing + RAM tables) compiles into every build, so the
-// ops are accepted and stored uniformly; they just have no bus effect in a build
-// whose data path is absent.
+// 0x92/0x93 affect injection, which only splices while INJECT mode is active;
+// 0x94/0x95/0x96 affect the generator, which only runs while SOURCE mode is active
+// (modes are selected at runtime via 0xA4). The control plane (framing + RAM
+// tables) is always present, so the ops are accepted and stored uniformly in every
+// mode; they just have no bus effect unless their data path is the active mode.
 #define PIFLEX_OUT_SET_INJECT_RULE    0x92
 #define PIFLEX_OUT_CLEAR_INJECT_RULES 0x93
 #define PIFLEX_OUT_SET_SOURCE_SLOT    0x94

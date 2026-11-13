@@ -74,3 +74,25 @@ void flexray_tx_init(void) {
                             FR_TX_IDLE_BITS);
 #endif
 }
+
+void flexray_tx_deinit(void) {
+    // Stop and release the forwarder SM(s) this build claimed, then free the pio1
+    // program. The caller (mode manager) has already driven both TXEN high, so the
+    // transceivers are back in RX before the program is removed.
+#ifdef FR_BRIDGE_ONE_WAY
+    pio_sm_set_enabled(s_pio, s_sm_to_fr1, false);
+    pio_sm_unclaim(s_pio, s_sm_to_fr1);
+#else
+    pio_sm_set_enabled(s_pio, s_sm_to_fr2, false);
+    pio_sm_set_enabled(s_pio, s_sm_to_fr1, false);
+    pio_sm_unclaim(s_pio, s_sm_to_fr2);
+    pio_sm_unclaim(s_pio, s_sm_to_fr1);
+#endif
+    pio_remove_program(s_pio, &flexray_tx_program, s_offset);
+
+    // Return the cross-SM gate GPIO (GP7) to a defined, non-driving input so a
+    // later mode does not inherit a driven level.
+    gpio_init(FR_TX_GATE_FR2_TO_FR1);
+    gpio_pull_up(FR_TX_GATE_FR2_TO_FR1);
+    gpio_set_dir(FR_TX_GATE_FR2_TO_FR1, GPIO_IN);
+}

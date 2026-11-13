@@ -18,6 +18,11 @@
 // first frame. Call instead of flexray_tx_init() in the source build.
 void flexray_source_init(void);
 
+// Tear the generator down for a runtime mode switch: stop + free both channels'
+// DMA and SMs and the shared pio1 program (TXEN released by the mode manager
+// first). After this the pio1 instruction memory, SMs and DMA are free.
+void flexray_source_deinit(void);
+
 // Advance the free-running schedule. Call once per main-loop iteration: when the
 // next slot's time is due (FR_SRC_FRAME_PERIOD_US apart) it builds that slot's
 // frame for each configured channel, clocks it out via DMA, then steps to the

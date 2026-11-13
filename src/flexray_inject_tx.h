@@ -4,9 +4,9 @@
 // Emits a rebuilt (optionally spliced) FlexRay frame on the destination channel
 // through the flexray_inject.pio transmitter. This is the "modify-and-re-emit"
 // path the injector takes for a slot it overrides, in place of the verbatim
-// bit-mirror. Only compiled/started in the injector build (-DFR_INJECT), where
-// the FR2 -> FR1 mirror is NOT started, so the inject SM is the sole driver of
-// FR1 TXD/TXEN and there is no PIO contention on the bus.
+// bit-mirror. Always compiled in; started when the host selects INJECT mode
+// (0xA4), where the FR2 -> FR1 mirror is NOT started, so the inject SM is the sole
+// driver of FR1 TXD/TXEN and there is no PIO contention on the bus.
 //
 // TIMING / APPROACH (see flexray_inject_tx.c for the full budget): the pure
 // bit-mirror emits each bit ~30 ns after it arrives and cannot alter a byte in
@@ -25,6 +25,11 @@
 // channel (FR1 TXD/TXEN), and release the listened channel's (FR2) TXEN so it
 // stays in receive. Call instead of flexray_tx_init() in the injector build.
 void flexray_inject_tx_init(void);
+
+// Tear the injector TX path down for a runtime mode switch: stop + free the DMA,
+// the SM and the pio1 program (TXEN is released by the mode manager first). After
+// this the pio1 instruction memory, SM and DMA channel are free for the next mode.
+void flexray_inject_tx_deinit(void);
 
 // Handle one frame captured on the listened (source) channel. If it is on the
 // source channel, rebuild it - splicing the override window when injection is

@@ -62,7 +62,11 @@ payload bytes, and `hostcfg_test` drives the runtime host-config ops
 (`0x92`–`0x96`) through the real framer to prove the RAM rule table + generator
 schedule parse and apply correctly, that `cycle_mask` behaves (specific cycle vs
 any) and a configured rule splices the same bytes the compile-time rule did, and
-that the `0xA3` status is exactly 16 bytes with the right counter fields.
+that the `0xA3` status is exactly 16 bytes with the right counter fields, and
+`mode_test` drives the runtime mode manager with fake hooks to prove the safe
+transition order (release TXEN → tear down the old mode → enter the new one),
+that an out-of-range mode is ignored, and that re-selecting the active mode is a
+no-op.
 
 ```sh
 cd test
@@ -72,6 +76,7 @@ gcc -I ../src injector_test.c ../src/flexray_injector.c ../src/flexray_source_cf
 gcc -I ../src inject_build_test.c ../src/flexray_inject_build.c ../src/flexray_decode.c -o inject_build_test && ./inject_build_test
 gcc -I ../src source_test.c ../src/flexray_source.c ../src/flexray_inject_build.c ../src/flexray_decode.c -o source_test && ./source_test
 gcc -I ../src hostcfg_test.c ../src/flexray_injector.c ../src/flexray_source_cfg.c -o hostcfg_test && ./hostcfg_test
+gcc -I ../src mode_test.c ../src/flexray_mode.c -o mode_test && ./mode_test
 ```
 
 ### Runtime host configuration (ops `0x92`–`0x96`, status `0xA3`)
@@ -93,9 +98,34 @@ defaults, so an un-configured device behaves exactly as before.
   `total_inject_matches` / `total_inject_drops` counters.
 
 The exact byte layouts are the single source of truth in
-[`src/protocol.h`](src/protocol.h); `0x92`/`0x93` only splice in an `-DFR_INJECT`
-build and `0x94`–`0x96` only emit in an `-DFR_SOURCE` build, but the control plane
-accepts and stores every op in all builds.
+[`src/protocol.h`](src/protocol.h); `0x92`/`0x93` only splice while **INJECT** mode
+is active and `0x94`–`0x96` only emit while **SOURCE** mode is active (see below),
+but the control plane accepts and stores every op in every mode.
+
+### Runtime data-path mode (requests `0xA4`/`0xA5`)
+
+One firmware compiles **every** TX path in and selects the data path at runtime —
+no more mutually-exclusive compile-time builds:
+
+| Mode | Value | Behaviour |
+|------|-------|-----------|
+| `SNIFF`  | 0 | RX only; both TXEN released, nothing drives the bus (boot default) |
+| `BRIDGE` | 1 | bidirectional MITM bit-mirror (`flexray_tx`) |
+| `INJECT` | 2 | regenerate FR2→FR1 + splice on rule (`flexray_inject_tx`) |
+| `SOURCE` | 3 | standalone generator (`flexray_source_*`) |
+
+- `0xA4 SET_MODE` (control-OUT, `wValue` = mode `0..3`) — switch the data path. An
+  out-of-range value is ignored. The switch is **bus-safe**: both TXEN lines are
+  released (transceivers back in RX) and the PIO TX stopped *before* `pio1` is
+  reprogrammed for the new mode, so the swap never glitches the bus.
+- `0xA5 GET_MODE` (control-IN) — returns 1 byte: the active mode.
+
+RX capture (`pio0`) runs in every mode; only one TX mode drives `pio1` at a time,
+loaded on entry and torn down on leave (`src/flexray_mode.c` + the per-mode
+`*_deinit`). The boot mode is `FR_DEFAULT_MODE` (SNIFF; override with
+`-DFR_DEFAULT_MODE=<0..3>`). The injector still defaults OFF (`0x91`) regardless of
+mode. The old `-DFR_INJECT` / `-DFR_SOURCE` flags are superseded (now no-ops);
+`-DFR_BRIDGE_ONE_WAY` still selects the one-way bridge variant.
 
 ## Status (phase 1)
 
@@ -106,6 +136,7 @@ accepts and stores every op in all builds.
 | 3 | MITM pass-through (both transceivers, per-frame TXEN, 9-bit TSS) | **working on hardware** — bit-mirror bridge: each channel's frames are repeated onto the other with a 9-bit TSS and per-frame TXEN, via a per-direction TX replay PIO. Bench-verified on a Pi_Flex V1 board: steady-state bidirectional bridging is byte-exact (independent far-side listener 100% on all three slots), zero dropped frames, RX capture uncompromised while bridging. A symmetric cross-direction gate + per-frame TXEN watchdog suppress the transceiver's own TXD→RXD echo (the NCV7383 can't blank RxD during TX, so this is handled in firmware). Known characteristic: abruptly cutting the source mid-stream leaves a brief (~1–2 s) self-quenching echo of the in-flight frames before the bus settles to idle; a continuously-running bus doesn't trigger it. Build `-DFR_BRIDGE_ONE_WAY=ON` for isolated forward-path testing |
 | 4 | Injector (`0x90`/`0x91`, E2E CRC-8) | **working on hardware** — SavvyCAN drives a payload override on the MITM bridge. Control plane on bulk-OUT EP `0x03`: op `0x91` toggles a global injector-enable (OFF at power-up for safety; the host pushes the desired state on connect), op `0x90` submits a replacement slice `[E2E CRC-8 (AUTOSAR, poly 0x1D, init 0xF1)][payload]` for a slot, verified against the CRC and a static allow-list of injectable slots + replace windows (`src/flexray_injector_rules.h`; ships sample rules for the bench generator's slots `0x001`/`0x002`/`0x004`). TX path (`-DFR_INJECT=ON`): a matched frame is decoded, the override window is spliced into the payload, the 24-bit frame CRC is recomputed, and the frame is re-emitted on FR1 via a dedicated FlexRay TX PIO (a CPU bit-serializer drives a uniform shifter PIO) — store-and-forward (~1 frame of latency), as an in-flight bit-mirror cannot change a byte and recompute the trailing CRC in the same slot (zero-latency cut-through is the documented follow-up). Bench-verified on a Pi_Flex V1 board: a cycle-targeted override lands at the exact window on exactly the targeted cycle with a valid recomputed CRC (the far-side listener and PiFlex's own strict FR1 RX both decode the result, all CRC-ok), non-matched slots and injector-off passthrough stay byte-exact, and there is no capture regression or runaway. Measured store-and-forward latency ~78 µs median (62–122 µs). The override store is last-write-wins per rule, so simultaneous multi-cycle override of one slot is a future enhancement. Default and `-DFR_BRIDGE_ONE_WAY=ON` builds keep the phase-3 bit-mirror unchanged |
 | 5 | Source / generator mode (`-DFR_SOURCE`) | **working on hardware** — the board becomes an active FlexRay signal source: instead of the MITM bridge it transmits its own compile-time static schedule (`src/flexray_source_schedule.h`; ships the bench sample slots `0x001`/`0x002`/`0x004`, 8-byte payloads, both channels). A free-running scheduler walks the slot table once per FlexRay cycle with a 0–63 cycle counter (wraps) written to the header cycle field, paces one slot frame every `FR_SRC_FRAME_PERIOD_US` (named timing `#define`s in `config.h`), and clocks each frame out through the phase-4 CPU bit-serializer + uniform-shifter PIO (`flexray_inject_build` / `flexray_inject.pio`). Dual-channel: two TX state machines on pio1 drive FR1 and FR2, each frame carrying its correct per-channel 24-bit CRC (init `0xFEDCBA` on FR1/bus A, `0xABCDEF` on FR2/bus B); the last payload byte also advances with the cycle so changing data is visible without reading the header. RX capture (pio0) keeps running, so SavvyCAN watches the board's own emission via the normal record stream (the NCV7383 does not blank its RXD during TX, so each channel self-captures). Not a full FlexRay cluster — no coldstart/sync/NIT/bus-guardian; it assumes it is the sole source on the bench bus. Bench-verified on a Pi_Flex V1 board (external generator removed, board the sole source): slots `0x001`/`0x002`/`0x004` decode on both channels and an independent far-side listener, the cycle counter sweeps the full 0–63 and wraps, payloads match the schedule with the last byte tracking the cycle, and every record is frame- and header-CRC-ok on both channels. ~671 fps per slot per channel (~4025 frames/s total) at the default 500 µs period, rock-steady, with both channels self-capturing over USB at 0 % steady-state loss and no regression to the phase 1–4 builds. Host round-trip test `source_test` passes. Default and `-DFR_BRIDGE_ONE_WAY`/`-DFR_INJECT` builds are unchanged (the source TUs are compiled only under `-DFR_SOURCE`). |
+| 7 | Runtime mode switching — one firmware, `SNIFF`/`BRIDGE`/`INJECT`/`SOURCE` selectable at runtime (`0xA4`/`0xA5`) | **host-tested; bench-pending** — every TX path is compiled in and the data path is chosen at runtime instead of at build time: control request `0xA4 SET_MODE` (`wValue` 0–3) with a bus-safe transition (release both TXEN → tear down the old mode's `pio1` program/SMs/DMA → run the new mode's `*_init`; TXEN released before `pio1` is reprogrammed), `0xA5 GET_MODE` reads it back. Boot default SNIFF (RX only), injector still OFF at boot. RX (`pio0`) runs in every mode; one TX mode drives `pio1` at a time. SDK-free mode core (`src/flexray_mode.c`) + per-mode `*_deinit`; host test `mode_test` pins the transition order, the ignore-invalid and no-op-on-same-mode rules. Builds clean in the default config (and `-DFR_DEFAULT_MODE`, `-DFR_BRIDGE_ONE_WAY`); the old `-DFR_INJECT`/`-DFR_SOURCE` flags are superseded no-ops. Not yet hardware-verified — a separate bench session confirms mode switching on the board |
 | 6 | CAN + the 2× CAN / 2× FlexRay board (`can2040`) | planned |
 
 The core clean-room decode — TSS/FSS/BSS line recovery in

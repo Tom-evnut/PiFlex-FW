@@ -14,12 +14,10 @@
 #include "flexray_tx.h"
 #include "flexray_record.h"
 #include "flexray_injector.h"
-#ifdef FR_INJECT
 #include "flexray_inject_tx.h"
-#endif
-#ifdef FR_SOURCE
 #include "flexray_source_tx.h"
-#endif
+#include "flexray_mode.h"
+#include "flexray_mode_hw.h"
 
 static uint8_t s_record_format = PIFLEX_FMT_STOCK;
 
@@ -111,6 +109,20 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage,
             return tud_control_xfer(rhport, req, status, sizeof(status));
         }
 
+        case PIFLEX_SET_MODE:
+            // Switch the data path at runtime. wValue = mode 0..3; an out-of-range
+            // value is ignored (fr_mode_set returns false, no transition). The swap
+            // releases both TXEN before reprogramming pio1, so it is bus-safe; this
+            // runs in tud_task() (main-loop context), not an ISR. ACK either way.
+            fr_mode_set((unsigned)req->wValue);
+            return tud_control_status(rhport, req);
+
+        case PIFLEX_GET_MODE: {
+            static uint8_t mode;
+            mode = (uint8_t)fr_mode_active();
+            return tud_control_xfer(rhport, req, &mode, sizeof(mode));
+        }
+
         case PIFLEX_RESET_COMMS:
             return tud_control_status(rhport, req);
 
@@ -130,12 +142,12 @@ int main(void) {
 
     // Pi_Flex board bring-up (mirrors the proven dynm KNOWN_GOOD sequence).
     //
-    // The TXD/TXEN lines belong to the TX bridge now: flexray_tx_init() (below)
-    // takes over those four GPIOs, leaving each TXEN released (inactive HIGH, so
-    // the NCV7383 stays in receive mode and drives its RXD) until a frame arms
-    // it. TXEN must not be left floating - the transceiver can then sit in TX
-    // mode and RXD stays idle (captured nothing on the bench) - so the bridge
-    // drives both TXEN high before handing them to PIO.
+    // This firmware selects the TX data path (sniff / bridge / inject / source) at
+    // runtime (flexray_mode_hw_init below, then control request 0xA4). At boot the
+    // mode manager's safe_bus step drives both TXEN released (inactive HIGH, so
+    // each NCV7383 stays in receive and drives its RXD) before any TX program is
+    // loaded; TXEN is never left floating. The default mode is SNIFF, so the board
+    // drives nothing until the host selects a mode.
 
     // Pull up the RXD inputs so the line is defined between frames (matches KNOWN_GOOD).
     gpio_pull_up(FR1_RXD_PIN);
@@ -149,25 +161,12 @@ int main(void) {
 
     tusb_init();
     fr_inject_reset();   // SAFETY: injector OFF until the host enables it (op 0x91)
-    flexray_rx_init();
-#if defined(FR_SOURCE)
-    // Source build: the board is the active transmitter. Instead of the bridge,
-    // start the generator - two TX SMs on pio1 (FR1 + FR2) that emit the static
-    // schedule (flexray_source_schedule.h) with a free-running 0..63 cycle
-    // counter. RX (pio0) keeps capturing the board's own emission. See
-    // flexray_source_tx.c.
-    flexray_source_init();
-#elif defined(FR_INJECT)
-    // Injector build: instead of the verbatim FR2->FR1 bit-mirror, regenerate
-    // each FR2 frame on FR1 (splicing a matched override) so a payload byte can
-    // be changed with a valid recomputed CRC. The inject SM is the sole driver
-    // of FR1 TXD/TXEN, so there is no PIO contention. See flexray_inject_tx.c.
-    flexray_inject_tx_init();
-#else
-    // Start the MITM bit-mirror bridge. RX (pio0) keeps capturing while the
-    // bridge (pio1) repeats each channel onto the other and drives TXEN.
-    flexray_tx_init();
-#endif
+    flexray_rx_init();   // RX capture (pio0) runs in every mode
+
+    // Bring up the runtime mode manager at the default (compile-time) mode. The
+    // host switches modes later with 0xA4; RX keeps capturing throughout. Only one
+    // TX mode drives pio1 at a time; the manager releases TXEN before every swap.
+    flexray_mode_hw_init((fr_mode_t)FR_DEFAULT_MODE);
 
     fr_frame_t frame;
     for (;;) {
@@ -176,19 +175,21 @@ int main(void) {
             sleep_ms(10);          // let the control-status ACK reach the host
             reset_usb_boot(0, 0);  // reboot into the RP2 USB mass-storage bootloader
         }
-#ifdef FR_SOURCE
-        // Drive the generator whether or not a host is attached: the board is a
-        // standalone bench signal source. Captured frames (including the board's
-        // own echoed emission) still only stream to the host while mounted.
-        flexray_source_tick();
-#endif
+
+        const fr_mode_t mode = fr_mode_active();
+
+        // SOURCE drives the generator whether or not a host is attached: the board
+        // is a standalone bench signal source. Captured frames (including the
+        // board's own echoed emission) still only stream to the host while mounted.
+        if (mode == PIFLEX_MODE_SOURCE)
+            flexray_source_tick();
+
         if (tud_vendor_mounted()) {
-            poll_injector_out();                 // drain EP 0x03 injector ops
+            poll_injector_out();                 // drain EP 0x03 host-config ops (all modes)
             if (flexray_rx_poll(&frame)) {
                 send_frame(&frame);              // stream the captured frame to the host
-#ifdef FR_INJECT
-                flexray_inject_forward(&frame);  // regenerate FR2->FR1, splicing a match
-#endif
+                if (mode == PIFLEX_MODE_INJECT)
+                    flexray_inject_forward(&frame);  // regenerate FR2->FR1, splicing a match
             }
         }
     }
