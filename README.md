@@ -66,7 +66,9 @@ that the `0xA3` status is exactly 16 bytes with the right counter fields, and
 `mode_test` drives the runtime mode manager with fake hooks to prove the safe
 transition order (release TXEN → tear down the old mode → enter the new one),
 that an out-of-range mode is ignored, and that re-selecting the active mode is a
-no-op.
+no-op, and `clock_test` pins the system-clock invariant that keeps every FlexRay
+PIO clock divider integer (`FR_SYS_CLK_KHZ` = 160 MHz → RX 2.0, emit 8.0), which
+a fractional divider would dither and so mis-sample bits on bridged frames.
 
 ```sh
 cd test
@@ -77,6 +79,7 @@ gcc -I ../src inject_build_test.c ../src/flexray_inject_build.c ../src/flexray_d
 gcc -I ../src source_test.c ../src/flexray_source.c ../src/flexray_inject_build.c ../src/flexray_decode.c -o source_test && ./source_test
 gcc -I ../src hostcfg_test.c ../src/flexray_injector.c ../src/flexray_source_cfg.c -o hostcfg_test && ./hostcfg_test
 gcc -I ../src mode_test.c ../src/flexray_mode.c -o mode_test && ./mode_test
+gcc -I ../src clock_test.c -o clock_test && ./clock_test
 ```
 
 ### Runtime host configuration (ops `0x92`–`0x96`, status `0xA3`)

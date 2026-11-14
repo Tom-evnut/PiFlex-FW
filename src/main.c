@@ -7,6 +7,8 @@
 // sequence number that exposes USB FIFO loss). See protocol.h / flexray_record.c.
 #include "pico/stdlib.h"
 #include "pico/bootrom.h"
+#include "hardware/vreg.h"
+#include "hardware/clocks.h"   // set_sys_clock_khz (static inline; needs this header)
 #include "tusb.h"
 #include "config.h"
 #include "protocol.h"
@@ -138,6 +140,22 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage,
 }
 
 int main(void) {
+    // FlexRay timing fidelity: raise clk_sys to an exact multiple of the FlexRay
+    // sample/emit rates (FR_SYS_CLK_KHZ, see config.h) so EVERY FlexRay PIO clock
+    // divider is integer. At the 150 MHz default the RX decoder (150/80 = 1.875)
+    // and the source/inject emitter (150/20 = 7.5) both run fractional dividers
+    // whose per-tick dither jitters sample points / emitted edges by ~+-7 ns;
+    // compounded with the bit-mirror's copy-loop edge quantization this flips bits
+    // next to transitions on bridged frames. 160 MHz makes RX 2.0 / emit 8.0 exact
+    // and also tightens the mirror quantization. Done FIRST, before stdio and every
+    // PIO program_init, so each reads the final clk_sys. USB is unaffected (its PLL
+    // is independent of clk_sys). The small vreg bump gives margin for the mild
+    // overclock above 150 MHz; the bench must confirm this board is stable here
+    // (and may trim the voltage/clock once measured).
+    vreg_set_voltage(VREG_VOLTAGE_1_15);
+    sleep_ms(2);                              // let the regulator settle before the PLL step
+    set_sys_clock_khz(FR_SYS_CLK_KHZ, true);
+
     stdio_init_all();
 
     // Pi_Flex board bring-up (mirrors the proven dynm KNOWN_GOOD sequence).

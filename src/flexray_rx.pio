@@ -81,6 +81,10 @@ static inline void flexray_rx_program_init(PIO pio, uint sm, uint offset,
     pio_gpio_init(pio, pin);
     pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, false /* input */);
 
+    // clk_sys must be an exact multiple of (bitrate_hz*oversample) so this divider
+    // is INTEGER - a fractional divider dithers the sample points and, compounded
+    // with the bit-mirror's edge quantization, mis-samples bits on bridged frames.
+    // FR_SYS_CLK_KHZ (config.h) = 160 MHz makes this 160/80 = 2.0 exactly.
     float div = (float)clock_get_hz(clk_sys) / (float)(bitrate_hz * oversample);
     sm_config_set_clkdiv(&c, div);
 
