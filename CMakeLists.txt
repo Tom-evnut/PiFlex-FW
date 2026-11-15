@@ -61,6 +61,8 @@ target_link_libraries(piflex_fw
     pico_unique_id
     hardware_pio
     hardware_dma
+    hardware_clocks   # set_sys_clock_khz (FlexRay integer-divider system clock)
+    hardware_vreg     # vreg_set_voltage (overclock margin for 160 MHz)
     tinyusb_device
     tinyusb_board
 )

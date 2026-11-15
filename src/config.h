@@ -25,6 +25,27 @@
 
 #define STATUS_LED_PIN  PICO_DEFAULT_LED_PIN  // direct GPIO on the non-W Pico 2
 
+// --- System clock ----------------------------------------------------------
+// Run clk_sys at an EXACT multiple of the FlexRay sample/emit rates so every
+// FlexRay PIO clock divider is INTEGER. This is a timing-fidelity requirement,
+// not just a speed knob:
+//   - RX decoder  (flexray_rx.pio):     div = clk_sys / (FR_BITRATE_HZ * FR_OVERSAMPLE)
+//   - source/inject emitter (flexray_inject.pio): div = clk_sys / (FR_BITRATE_HZ * 2)
+// At the SDK default 150 MHz BOTH are fractional (150/80 = 1.875 and 150/20 =
+// 7.5). A fractional PIO divider dithers each SM tick by up to one system clock,
+// so RX sample points and emitted edges jitter ~+-7 ns. On a chain where a PiFlex
+// is BOTH the source and the receiver (the two-board bench rig), that dither
+// compounds with the bit-mirror's copy-loop edge quantization (flexray_tx.pio,
+// ~1/3 bit) and eats the receiver's bit-centre margin -> single bits next to
+// transitions mis-sample (~15% of bridged frames corrupt; worst mid-frame /
+// high-transition bytes, clean at frame ends). 160 MHz is the lowest clock that
+// makes BOTH dividers integer (RX 160/80 = 2.0, emit 160/20 = 8.0) and it also
+// shrinks the mirror's copy-loop quantization (~33 ns -> ~25 ns). Set in main()
+// before any PIO init. This is a mild overclock above the 150 MHz default: the
+// bench must confirm stability on this board (main() nudges vreg for margin).
+// 192 MHz (RX 2.4 -> fractional again) is NOT valid; use 160/240/320 (x80).
+#define FR_SYS_CLK_KHZ  160000u
+
 // --- FlexRay timing --------------------------------------------------------
 #define FR_BITRATE_HZ   10000000u  // 10 Mbit/s
 #define FR_OVERSAMPLE   8u         // PIO samples per bit (see flexray_rx.pio)

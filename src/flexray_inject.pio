@@ -78,7 +78,11 @@ static inline void flexray_inject_program_init(PIO pio, uint sm, uint offset,
     pio_sm_set_consecutive_pindirs(pio, sm, txd_pin, 1, true /* output */);
     pio_sm_set_consecutive_pindirs(pio, sm, txen_pin, 1, true /* output */);
 
-    // 2 PIO cycles per FlexRay bit (100 ns/bit at 10 Mbit/s).
+    // 2 PIO cycles per FlexRay bit (100 ns/bit at 10 Mbit/s). clk_sys must be an
+    // exact multiple of (10 MHz * 2) so this divider is INTEGER - a fractional
+    // divider dithers the emitted edges (~+-7 ns at 150 MHz, where 150/20 = 7.5),
+    // which erodes the far receiver's margin when a bridge also re-quantizes the
+    // edges. FR_SYS_CLK_KHZ (config.h) = 160 MHz makes this 160/20 = 8.0 exactly.
     const uint32_t clk = clock_get_hz(clk_sys);
     sm_config_set_clkdiv(&c, (float)clk / (float)(10000000u * 2u));
 
